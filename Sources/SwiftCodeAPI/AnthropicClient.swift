@@ -170,6 +170,24 @@ public struct ContentBlock: Sendable, Codable {
     public var input: JSONValue?
     public var thinking: String?
     public var signature: String?
+
+    public init(
+        type: String,
+        text: String? = nil,
+        id: String? = nil,
+        name: String? = nil,
+        input: JSONValue? = nil,
+        thinking: String? = nil,
+        signature: String? = nil
+    ) {
+        self.type = type
+        self.text = text
+        self.id = id
+        self.name = name
+        self.input = input
+        self.thinking = thinking
+        self.signature = signature
+    }
 }
 
 public struct MessagesResponse: Sendable, Codable {
@@ -187,6 +205,26 @@ public struct MessagesResponse: Sendable, Codable {
         case stopReason = "stop_reason"
         case stopSequence = "stop_sequence"
     }
+
+    public init(
+        id: String,
+        type: String = "message",
+        role: String = "assistant",
+        content: [ContentBlock],
+        model: String,
+        stopReason: String? = nil,
+        stopSequence: String? = nil,
+        usage: UsageResponse
+    ) {
+        self.id = id
+        self.type = type
+        self.role = role
+        self.content = content
+        self.model = model
+        self.stopReason = stopReason
+        self.stopSequence = stopSequence
+        self.usage = usage
+    }
 }
 
 public struct UsageResponse: Sendable, Codable {
@@ -200,6 +238,18 @@ public struct UsageResponse: Sendable, Codable {
         case outputTokens = "output_tokens"
         case cacheReadInputTokens = "cache_read_input_tokens"
         case cacheCreationInputTokens = "cache_creation_input_tokens"
+    }
+
+    public init(
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheReadInputTokens: Int? = nil,
+        cacheCreationInputTokens: Int? = nil
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadInputTokens = cacheReadInputTokens
+        self.cacheCreationInputTokens = cacheCreationInputTokens
     }
 }
 
@@ -275,7 +325,7 @@ public actor AnthropicClient {
     // MARK: - Streaming
 
     /// Stream a messages request, yielding `StreamEvent` values as they arrive.
-    public func messagesStream(_ request: MessagesRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+    public nonisolated func messagesStream(_ request: MessagesRequest) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {

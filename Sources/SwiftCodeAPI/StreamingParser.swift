@@ -19,6 +19,10 @@ public enum StreamEvent: Sendable {
 
 public struct MessageStartData: Sendable, Decodable {
     public let message: StreamMessage
+
+    public init(message: StreamMessage) {
+        self.message = message
+    }
 }
 
 public struct StreamMessage: Sendable, Decodable {
@@ -36,6 +40,26 @@ public struct StreamMessage: Sendable, Decodable {
         case stopReason = "stop_reason"
         case stopSequence = "stop_sequence"
         case usage
+    }
+
+    public init(
+        id: String,
+        type: String = "message",
+        role: String = "assistant",
+        content: [StreamContentBlock] = [],
+        model: String,
+        stopReason: String? = nil,
+        stopSequence: String? = nil,
+        usage: StreamUsage
+    ) {
+        self.id = id
+        self.type = type
+        self.role = role
+        self.content = content
+        self.model = model
+        self.stopReason = stopReason
+        self.stopSequence = stopSequence
+        self.usage = usage
     }
 }
 
@@ -83,6 +107,11 @@ public struct MessageDeltaData: Sendable, Decodable {
     private enum CodingKeys: String, CodingKey {
         case stopReason = "stop_reason"
         case stopSequence = "stop_sequence"
+    }
+
+    public init(stopReason: String? = nil, stopSequence: String? = nil) {
+        self.stopReason = stopReason
+        self.stopSequence = stopSequence
     }
 }
 

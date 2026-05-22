@@ -46,7 +46,7 @@ let package = Package(
         ),
         .target(name: "SwiftCodeCore", dependencies: [.product(name: "Logging", package: "swift-log")]),
         .target(name: "SwiftCodeAPI", dependencies: ["SwiftCodeCore", .product(name: "AsyncHTTPClient", package: "async-http-client")]),
-        .target(name: "SwiftCodeAgent", dependencies: ["SwiftCodeCore", "SwiftCodeAPI"]),
+        .target(name: "SwiftCodeAgent", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodeNative"]),
         .target(name: "SwiftCodeTerminalUI", dependencies: ["SwiftCodeCore", .product(name: "NIOCore", package: "swift-nio")]),
         .target(name: "SwiftCodeTools", dependencies: ["SwiftCodeCore", "SwiftCodeAgent", "SwiftCodeTerminalUI"]),
         .target(name: "SwiftCodeCommands", dependencies: ["SwiftCodeCore", "SwiftCodeTools", "SwiftCodeTerminalUI"]),
