@@ -1,0 +1,4 @@
+[install.overrides]
+"@ant/claude-for-chrome-mcp" = "./stubs/@ant/claude-for-chrome-mcp"
+"audio-capture-napi" = "./stubs/audio-capture-napi"
+"modifiers-napi" = "./stubs/modifiers-napi"

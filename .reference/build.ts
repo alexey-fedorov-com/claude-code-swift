@@ -65,6 +65,26 @@ const FEATURE_FLAGS: Record<string, boolean> = {
   OVERFLOW_TEST_TOOL: false,         // internal test tool
 };
 
+// ── Bun Plugin: native stub aliases ───────────────────────────────────────
+// These packages are not available via npm; use local stubs instead.
+const nativeStubsPlugin: BunPlugin = {
+  name: 'native-stubs',
+  setup(build) {
+    const aliases: Record<string, string> = {
+      '@ant/claude-for-chrome-mcp': './stubs/@ant/claude-for-chrome-mcp/index.ts',
+      'audio-capture-napi': './stubs/audio-capture-napi/index.ts',
+      'modifiers-napi': './stubs/modifiers-napi/index.ts',
+      'color-diff-napi': './stubs/color-diff-napi/index.ts',
+    };
+    for (const [pkg, stub] of Object.entries(aliases)) {
+      const escapedPkg = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      build.onResolve({ filter: new RegExp(`^${escapedPkg}$`) }, () => ({
+        path: require('path').resolve(import.meta.dir, stub),
+      }));
+    }
+  },
+};
+
 // ── Bun Plugin: bun:bundle shim ───────────────────────────────────────────
 const bunBundlePlugin: BunPlugin = {
   name: 'bun-bundle-shim',
@@ -103,7 +123,7 @@ const result = await Bun.build({
   outdir: 'dist',
   target: 'bun',
   sourcemap: 'linked',
-  plugins: [bunBundlePlugin],
+  plugins: [nativeStubsPlugin, bunBundlePlugin],
   define: {
     'MACRO.VERSION': JSON.stringify(version),
     'MACRO.BUILD_TIME': JSON.stringify(buildTime),
