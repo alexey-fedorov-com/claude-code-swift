@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+Package.resolved
+.reference/node_modules/
+.reference/dist/
