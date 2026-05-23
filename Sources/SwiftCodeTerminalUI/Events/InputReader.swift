@@ -11,7 +11,7 @@ import Foundation
 ///
 /// IMPORTANT: The caller must put the terminal into raw mode before using this.
 /// Use `TerminalRawMode.enable()` / `disable()` for that.
-public final class InputReader {
+public final class InputReader: @unchecked Sendable {
 
     public init() {}
 

@@ -173,7 +173,7 @@ final class InputEventTests: XCTestCase {
         XCTAssertNotEqual(InputEvent.arrowUp, InputEvent.arrowDown)
         XCTAssertEqual(InputEvent.paste("x"), InputEvent.paste("x"))
         XCTAssertNotEqual(InputEvent.paste("x"), InputEvent.paste("y"))
-        XCTAssertEqual(InputEvent.resize(rows: 24, cols: 80), InputEvent.resize(rows: 24, cols: 80))
-        XCTAssertNotEqual(InputEvent.resize(rows: 24, cols: 80), InputEvent.resize(rows: 30, cols: 80))
+        XCTAssertEqual(InputEvent.resize(width: 80, height: 24), InputEvent.resize(width: 80, height: 24))
+        XCTAssertNotEqual(InputEvent.resize(width: 80, height: 24), InputEvent.resize(width: 80, height: 30))
     }
 }

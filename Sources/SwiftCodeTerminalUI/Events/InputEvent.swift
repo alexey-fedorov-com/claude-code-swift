@@ -36,7 +36,7 @@ public enum InputEvent: Equatable {
     case blur
 
     // Window resize
-    case resize(rows: Int, cols: Int)
+    case resize(width: Int, height: Int)
 
     // Mouse (basic position + button)
     case mousePress(button: Int, row: Int, col: Int)
