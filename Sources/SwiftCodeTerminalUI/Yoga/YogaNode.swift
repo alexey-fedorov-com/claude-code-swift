@@ -10,6 +10,10 @@ public class YogaNode {
     public var padding: EdgeInsets = .zero
     public var margin: EdgeInsets = .zero
     public var flexGrow: Double = 0.0
+    public var flexShrink: Double = 1.0
+    public var gap: Int = 0
+    public var alignSelf: AlignSelf = .auto
+    public var display: Display = .flex
     public var minWidth: Int? = nil
     public var maxWidth: Int? = nil
 

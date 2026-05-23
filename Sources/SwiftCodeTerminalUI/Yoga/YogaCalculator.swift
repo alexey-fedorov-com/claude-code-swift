@@ -18,6 +18,13 @@ public struct YogaCalculator {
     // MARK: - Width pass
 
     private func measureWidth(node: YogaNode, availableWidth: Int) {
+        // display:none → zero out and skip recursion
+        if node.display == .none {
+            node.layoutWidth = 0
+            node.layoutHeight = 0
+            return
+        }
+
         let resolvedWidth: Int
         switch node.width {
         case .fixed(let w):
@@ -54,7 +61,8 @@ public struct YogaCalculator {
 
             // For row direction with .auto width, sum up children widths
             if case .auto = node.width, node.flexDirection == .row {
-                let childrenTotal = node.children.reduce(0) { $0 + $1.layoutWidth + $1.margin.horizontal }
+                let visibleChildren = node.children.filter { $0.display != .none }
+                let childrenTotal = visibleChildren.reduce(0) { $0 + $1.layoutWidth + $1.margin.horizontal }
                 node.layoutWidth = childrenTotal + node.padding.horizontal
             }
         }
@@ -63,6 +71,13 @@ public struct YogaCalculator {
     // MARK: - Height pass
 
     private func measureHeight(node: YogaNode, availableHeight: Int) {
+        // display:none → zero out and skip recursion (width already zeroed in measureWidth)
+        if node.display == .none {
+            node.layoutWidth = 0
+            node.layoutHeight = 0
+            return
+        }
+
         let resolvedHeight: Int
         switch node.height {
         case .fixed(let h):
@@ -95,14 +110,16 @@ public struct YogaCalculator {
                 measureHeight(node: child, availableHeight: max(0, childAvailable - child.margin.vertical))
             }
 
-            // Auto height: sum children in column, max in row
+            // Auto height: sum children in column, max in row (skip display:none)
             if case .auto = node.height {
+                let visibleChildren = node.children.filter { $0.display != .none }
                 switch node.flexDirection {
                 case .column:
-                    let childrenTotal = node.children.reduce(0) { $0 + $1.layoutHeight + $1.margin.vertical }
-                    node.layoutHeight = childrenTotal + node.padding.vertical
+                    let childrenTotal = visibleChildren.reduce(0) { $0 + $1.layoutHeight + $1.margin.vertical }
+                    let gapTotal = visibleChildren.count > 1 ? node.gap * (visibleChildren.count - 1) : 0
+                    node.layoutHeight = childrenTotal + gapTotal + node.padding.vertical
                 case .row:
-                    let maxChild = node.children.map { $0.layoutHeight + $0.margin.vertical }.max() ?? 0
+                    let maxChild = visibleChildren.map { $0.layoutHeight + $0.margin.vertical }.max() ?? 0
                     node.layoutHeight = maxChild + node.padding.vertical
                 }
             }
@@ -126,14 +143,16 @@ public struct YogaCalculator {
         case .column:
             layoutColumn(children: node.children, innerX: innerX, innerY: innerY,
                          innerWidth: innerWidth, innerHeight: innerHeight,
-                         justify: node.justifyContent, align: node.alignItems)
+                         justify: node.justifyContent, align: node.alignItems,
+                         gap: node.gap)
         case .row:
             layoutRow(children: node.children, innerX: innerX, innerY: innerY,
                       innerWidth: innerWidth, innerHeight: innerHeight,
-                      justify: node.justifyContent, align: node.alignItems)
+                      justify: node.justifyContent, align: node.alignItems,
+                      gap: node.gap)
         }
 
-        // Recurse
+        // Recurse (including display:none children so they get positioned at 0,0 consistently)
         for child in node.children {
             positionChildren(node: child, originX: child.layoutX - child.margin.left,
                              originY: child.layoutY - child.margin.top)
@@ -142,19 +161,50 @@ public struct YogaCalculator {
 
     private func layoutColumn(children: [YogaNode], innerX: Int, innerY: Int,
                                innerWidth: Int, innerHeight: Int,
-                               justify: JustifyContent, align: AlignItems) {
-        let totalChildHeight = children.reduce(0) { $0 + $1.layoutHeight + $1.margin.vertical }
-        let freeSpace = max(0, innerHeight - totalChildHeight)
+                               justify: JustifyContent, align: AlignItems,
+                               gap: Int) {
+        let visible = children.filter { $0.display != .none }
+        let gapTotal = visible.count > 1 ? gap * (visible.count - 1) : 0
+        // Zero out auto-height children that will be sized by flexGrow so freeSpace is computed correctly
+        for child in visible where child.flexGrow > 0 {
+            if case .auto = child.height { child.layoutHeight = 0 }
+        }
+        let totalChildHeight = visible.reduce(0) { $0 + $1.layoutHeight + $1.margin.vertical }
+        var freeSpace = max(0, innerHeight - totalChildHeight - gapTotal)
 
-        let offsets: [Int] = computeOffsets(count: children.count, freeSpace: freeSpace,
+        // Distribute freeSpace via flexGrow before justify-content offsets
+        let totalGrow = visible.reduce(0.0) { $0 + $1.flexGrow }
+        if totalGrow > 0 && freeSpace > 0 {
+            var distributed = 0
+            // Sort by flexGrow descending so largest gets the remainder
+            let sorted = visible.sorted { $0.flexGrow > $1.flexGrow }
+            for (idx, child) in sorted.enumerated() {
+                let share: Int
+                if idx == sorted.count - 1 {
+                    share = freeSpace - distributed
+                } else {
+                    share = Int(Double(freeSpace) * child.flexGrow / totalGrow)
+                }
+                child.layoutHeight += share
+                distributed += share
+            }
+            freeSpace = 0
+        }
+
+        let offsets: [Int] = computeOffsets(count: visible.count, freeSpace: freeSpace,
                                             justify: justify)
 
         var cursor = innerY
-        for (i, child) in children.enumerated() {
-            cursor += offsets[i]
+        var visibleIndex = 0
+        for child in children {
+            guard child.display != .none else { continue }
+            cursor += offsets[visibleIndex]
+            if visibleIndex > 0 { cursor += gap }
+            // Resolve effective align (alignSelf overrides parent alignItems)
+            let effectiveAlign = resolvedAlign(childSelf: child.alignSelf, parentAlign: align)
             // Align items (cross axis = X in column)
             let alignedX: Int
-            switch align {
+            switch effectiveAlign {
             case .start:
                 alignedX = innerX + child.margin.left
             case .center:
@@ -167,24 +217,56 @@ public struct YogaCalculator {
             child.layoutX = alignedX
             child.layoutY = cursor + child.margin.top
             cursor += child.layoutHeight + child.margin.vertical
+            visibleIndex += 1
         }
     }
 
     private func layoutRow(children: [YogaNode], innerX: Int, innerY: Int,
                             innerWidth: Int, innerHeight: Int,
-                            justify: JustifyContent, align: AlignItems) {
-        let totalChildWidth = children.reduce(0) { $0 + $1.layoutWidth + $1.margin.horizontal }
-        let freeSpace = max(0, innerWidth - totalChildWidth)
+                            justify: JustifyContent, align: AlignItems,
+                            gap: Int) {
+        let visible = children.filter { $0.display != .none }
+        let gapTotal = visible.count > 1 ? gap * (visible.count - 1) : 0
+        // Zero out auto-width children that will be sized by flexGrow so freeSpace is computed correctly
+        for child in visible where child.flexGrow > 0 {
+            if case .auto = child.width { child.layoutWidth = 0 }
+        }
+        let totalChildWidth = visible.reduce(0) { $0 + $1.layoutWidth + $1.margin.horizontal }
+        var freeSpace = max(0, innerWidth - totalChildWidth - gapTotal)
 
-        let offsets: [Int] = computeOffsets(count: children.count, freeSpace: freeSpace,
+        // Distribute freeSpace via flexGrow before justify-content offsets
+        let totalGrow = visible.reduce(0.0) { $0 + $1.flexGrow }
+        if totalGrow > 0 && freeSpace > 0 {
+            var distributed = 0
+            // Sort by flexGrow descending so largest gets the remainder
+            let sorted = visible.sorted { $0.flexGrow > $1.flexGrow }
+            for (idx, child) in sorted.enumerated() {
+                let share: Int
+                if idx == sorted.count - 1 {
+                    share = freeSpace - distributed
+                } else {
+                    share = Int(Double(freeSpace) * child.flexGrow / totalGrow)
+                }
+                child.layoutWidth += share
+                distributed += share
+            }
+            freeSpace = 0
+        }
+
+        let offsets: [Int] = computeOffsets(count: visible.count, freeSpace: freeSpace,
                                              justify: justify)
 
         var cursor = innerX
-        for (i, child) in children.enumerated() {
-            cursor += offsets[i]
+        var visibleIndex = 0
+        for child in children {
+            guard child.display != .none else { continue }
+            cursor += offsets[visibleIndex]
+            if visibleIndex > 0 { cursor += gap }
+            // Resolve effective align (alignSelf overrides parent alignItems)
+            let effectiveAlign = resolvedAlign(childSelf: child.alignSelf, parentAlign: align)
             // Align items (cross axis = Y in row)
             let alignedY: Int
-            switch align {
+            switch effectiveAlign {
             case .start:
                 alignedY = innerY + child.margin.top
             case .center:
@@ -197,6 +279,18 @@ public struct YogaCalculator {
             child.layoutX = cursor + child.margin.left
             child.layoutY = alignedY
             cursor += child.layoutWidth + child.margin.horizontal
+            visibleIndex += 1
+        }
+    }
+
+    /// Resolve effective cross-axis alignment for a child, honoring alignSelf over parent's alignItems.
+    private func resolvedAlign(childSelf: AlignSelf, parentAlign: AlignItems) -> AlignItems {
+        switch childSelf {
+        case .auto:   return parentAlign
+        case .start:  return .start
+        case .center: return .center
+        case .end:    return .end
+        case .stretch: return .stretch
         }
     }
 

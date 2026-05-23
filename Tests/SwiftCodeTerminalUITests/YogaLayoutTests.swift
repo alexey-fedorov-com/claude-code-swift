@@ -181,4 +181,86 @@ final class YogaLayoutTests: XCTestCase {
         XCTAssertEqual(bottom.layoutY, top.layoutY + top.layoutHeight,
                        "second child starts immediately below first")
     }
+
+    // MARK: - flexGrow distributes free space
+
+    func testFlexGrowDistributesFreeSpace() {
+        let root = YogaNode()
+        root.width = .fixed(20)
+        root.height = .fixed(1)
+        root.flexDirection = .row
+        let a = YogaNode(); a.flexGrow = 1; a.height = .fixed(1)
+        let b = YogaNode(); b.flexGrow = 2; b.height = .fixed(1)
+        root.addChild(a); root.addChild(b)
+        YogaCalculator().calculate(root: root, availableWidth: 20, availableHeight: 1)
+        // Total free space = 20 (no intrinsic widths) → 1:2 split = 7 and 13
+        // (rounding: 20/3 ≈ 6.66; with proportional distribution: 6 and 13, plus one extra)
+        // Accept either (6, 13+1) or (7, 13). Specifically: a between 6 and 7, b ≥ 13.
+        XCTAssertGreaterThanOrEqual(a.layoutWidth, 6)
+        XCTAssertLessThanOrEqual(a.layoutWidth, 7)
+        XCTAssertGreaterThanOrEqual(b.layoutWidth, 13)
+        XCTAssertEqual(a.layoutWidth + b.layoutWidth, 20)
+        XCTAssertEqual(b.layoutX, a.layoutWidth)
+    }
+
+    // MARK: - gap in column direction
+
+    func testGapColumnDirection() {
+        let root = YogaNode()
+        root.width = .fixed(10)
+        root.height = .auto
+        root.flexDirection = .column
+        root.gap = 1
+        let a = YogaNode(); a.height = .fixed(1); a.width = .fixed(10)
+        let b = YogaNode(); b.height = .fixed(1); b.width = .fixed(10)
+        let c = YogaNode(); c.height = .fixed(1); c.width = .fixed(10)
+        root.addChild(a); root.addChild(b); root.addChild(c)
+        YogaCalculator().calculate(root: root, availableWidth: 10, availableHeight: 10)
+        XCTAssertEqual(a.layoutY, 0)
+        XCTAssertEqual(b.layoutY, 2) // 1 row gap
+        XCTAssertEqual(c.layoutY, 4)
+    }
+
+    // MARK: - alignSelf overrides parent alignItems
+
+    func testAlignSelfEnd() {
+        let root = YogaNode()
+        root.width = .fixed(20)
+        root.height = .fixed(5)
+        root.flexDirection = .row
+        root.alignItems = .start
+        let a = YogaNode(); a.width = .fixed(3); a.height = .fixed(1); a.alignSelf = .end
+        root.addChild(a)
+        YogaCalculator().calculate(root: root, availableWidth: 20, availableHeight: 5)
+        XCTAssertEqual(a.layoutY, 4) // bottom of 5-row row
+    }
+
+    // MARK: - percentage width
+
+    func testPercentageWidth() {
+        let root = YogaNode()
+        root.width = .fixed(20)
+        root.height = .fixed(1)
+        root.flexDirection = .row
+        let a = YogaNode(); a.width = .percent(0.5); a.height = .fixed(1)
+        root.addChild(a)
+        YogaCalculator().calculate(root: root, availableWidth: 20, availableHeight: 1)
+        XCTAssertEqual(a.layoutWidth, 10)
+    }
+
+    // MARK: - display:none zeroes size and skips in layout
+
+    func testDisplayNoneZeroSize() {
+        let root = YogaNode()
+        root.flexDirection = .column
+        root.width = .fixed(10)
+        let a = YogaNode(); a.width = .fixed(10); a.height = .fixed(3)
+        let b = YogaNode(); b.width = .fixed(10); b.height = .fixed(2); b.display = .none
+        let c = YogaNode(); c.width = .fixed(10); c.height = .fixed(4)
+        root.addChild(a); root.addChild(b); root.addChild(c)
+        YogaCalculator().calculate(root: root, availableWidth: 10, availableHeight: 20)
+        XCTAssertEqual(b.layoutWidth, 0)
+        XCTAssertEqual(b.layoutHeight, 0)
+        XCTAssertEqual(c.layoutY, 3) // immediately after `a`, skipping `b`
+    }
 }

@@ -58,3 +58,16 @@ public enum BorderStyle: Sendable {
     case double
     case rounded
 }
+
+public enum Display: Sendable {
+    case flex
+    case none
+}
+
+public enum AlignSelf: Sendable {
+    case auto      // inherit from parent's alignItems
+    case start
+    case center
+    case end
+    case stretch
+}
