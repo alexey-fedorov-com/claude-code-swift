@@ -1,3 +1,5 @@
+import SwiftCodeNative
+
 // MARK: - REPLReducer
 
 public enum REPLReducer {
@@ -81,6 +83,27 @@ public enum REPLReducer {
                 .filter(prefix: slash.prefix, commands: state.availableCommands)
                 .prefix(20)
                 .map { .command($0) }
+        } else if let at = AtMentionSuggestions.detectTrigger(
+            text: state.cursor.text,
+            cursorOffset: state.cursor.offset
+        ) {
+            let split = AtMentionSuggestions.splitDirectoryAndPrefix(at.partialPath)
+            let scanDir = split.directory.isEmpty
+                ? state.workingDirectory
+                : "\(state.workingDirectory)/\(split.directory)"
+            let entries = (try? PathCompletion.complete(prefix: split.prefix, in: scanDir)) ?? []
+            if !entries.isEmpty {
+                state.suggestionTrigger = .atMention(at)
+                state.suggestions = entries.prefix(20).map {
+                    .path(PathSuggestion(
+                        display: split.directory.isEmpty ? $0.name : "\(split.directory)/\($0.name)",
+                        isDirectory: $0.kind == .directory
+                    ))
+                }
+            } else {
+                state.suggestions = []
+                state.suggestionTrigger = nil
+            }
         } else {
             state.suggestions = []
             state.suggestionTrigger = nil
@@ -99,6 +122,12 @@ public enum REPLReducer {
                 cursor: state.cursor,
                 trigger: trig,
                 selection: cmd
+            )
+        case (.atMention(let trig)?, .path(let p)):
+            state.cursor = AtMentionSuggestions.apply(
+                cursor: state.cursor,
+                trigger: trig,
+                selection: p
             )
         default:
             break

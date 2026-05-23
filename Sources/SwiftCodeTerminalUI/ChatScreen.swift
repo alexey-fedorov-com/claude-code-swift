@@ -12,7 +12,7 @@ public enum ChatMessage: Sendable, Equatable {
 
 public enum SuggestionTriggerKind: Sendable, Equatable {
     case slash(SlashTrigger)
-    // case atMention(AtMentionTrigger)  // wired in Task 13
+    case atMention(AtMentionTrigger)
 }
 
 // MARK: - ChatScreenState
