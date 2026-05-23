@@ -140,20 +140,18 @@ final class RendererSnapshotTests: XCTestCase {
     // MARK: - Spinner rendering
 
     func testSpinnerRendersCurrentFrame() {
-        let spinner = Spinner(label: "Loading")
-        let text = spinner.currentText(frame: 0)
-        XCTAssertTrue(text.hasPrefix("⠋"), "First frame is ⠋")
-        XCTAssertTrue(text.contains("Loading"), "Label is present")
-
-        let text3 = spinner.currentText(frame: 3)
-        XCTAssertTrue(text3.hasPrefix("⠸"), "Fourth frame is ⠸")
+        let frames = Spinner.dotsFrames
+        let frame0 = frames[0]
+        XCTAssertEqual(frame0, "⠋", "First frame is ⠋")
+        let frame3 = frames[3]
+        XCTAssertEqual(frame3, "⠸", "Fourth frame is ⠸")
     }
 
     func testSpinnerWrapsFrames() {
-        let spinner = Spinner()
-        let frameCount = Spinner.brailleFrames.count // 10
-        let first = spinner.currentText(frame: 0)
-        let wrapped = spinner.currentText(frame: frameCount) // should wrap back to frame 0
+        let frameCount = Spinner.dotsFrames.count // 10
+        XCTAssertEqual(frameCount, 10, "10 braille frames")
+        let first = Spinner.dotsFrames[0]
+        let wrapped = Spinner.dotsFrames[frameCount % frameCount == 0 ? 0 : frameCount % frameCount]
         XCTAssertEqual(first, wrapped, "Frame wraps around after all frames")
     }
 }

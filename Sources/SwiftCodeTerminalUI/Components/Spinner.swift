@@ -1,11 +1,37 @@
 import Foundation
 
-/// Spinner component with animated braille frames and an optional label.
-public struct Spinner {
-    /// Classic braille spinner (10 frames, ~80ms each for smooth animation).
-    public static let brailleFrames: [String] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+public enum Spinner {
+    public static let dotsFrames: [String] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    /// Dot-based spinner (simpler, for terminals without Unicode support).
+    @available(*, deprecated, renamed: "dotsFrames")
+    public static let brailleFrames: [String] = dotsFrames
+}
+
+public struct SpinnerView: View {
+    public let frameIndex: Int
+    public let color: CellColor
+
+    public init(frameIndex: Int, color: CellColor = .rgb(215, 119, 87)) {
+        self.frameIndex = frameIndex; self.color = color
+    }
+
+    public func buildLayoutNode(theme: Theme, styles: CellStyleTable) -> LayoutNode {
+        let frame = Spinner.dotsFrames[frameIndex % Spinner.dotsFrames.count]
+        let yoga = YogaNode()
+        yoga.text = frame
+        yoga.width = .fixed(1); yoga.height = .fixed(1)
+        let styleId = styles.id(for: CellStyle(fg: color))
+        return LayoutNode(yoga: yoga) { screen, node in
+            screen.write(text: frame, at: node.yoga.layoutX, row: node.yoga.layoutY, styleId: styleId)
+        }
+    }
+}
+
+// MARK: - Legacy spinner type
+
+@available(*, deprecated, message: "Use SpinnerView for View-protocol-based rendering")
+public struct LegacySpinner {
+    public static let brailleFrames: [String] = Spinner.dotsFrames
     public static let dotFrames: [String] = ["|", "/", "-", "\\"]
 
     public let frames: [String]
@@ -15,7 +41,7 @@ public struct Spinner {
 
     public init(
         label: String? = nil,
-        frames: [String] = Spinner.brailleFrames,
+        frames: [String] = LegacySpinner.brailleFrames,
         color: ANSIColor? = nil,
         bold: Bool = false
     ) {
@@ -25,9 +51,6 @@ public struct Spinner {
         self.bold = bold
     }
 
-    // MARK: - Current frame
-
-    /// Returns the current frame string (spinner + optional label).
     public func currentText(frame: Int) -> String {
         let f = frames[frame % frames.count]
         if let label = label {
@@ -36,9 +59,6 @@ public struct Spinner {
         return f
     }
 
-    // MARK: - Build node
-
-    /// Build a YogaNode for the current animation frame.
     public func buildNode(frame: Int) -> YogaNode {
         let node = YogaNode()
         node.text = currentText(frame: frame)
@@ -47,11 +67,8 @@ public struct Spinner {
         return node
     }
 
-    /// Build a RenderNode from a laid-out yoga node.
     public func buildRenderNode(from yogaNode: YogaNode, frame: Int) -> RenderNode {
-        let attrs = TextAttributes(
-            color: color, bold: bold
-        )
+        let attrs = TextAttributes(color: color, bold: bold)
         return .text(
             x: yogaNode.layoutX, y: yogaNode.layoutY,
             width: yogaNode.layoutWidth, height: yogaNode.layoutHeight,
@@ -60,13 +77,6 @@ public struct Spinner {
         )
     }
 
-    // MARK: - Simple drive loop (for demo use; real usage drives frame externally)
-
-    /// Returns a timer-based sequence of frame indices using a callback.
-    /// - Parameters:
-    ///   - interval: Seconds per frame.
-    ///   - onFrame: Called with the current frame index.
-    ///   - stop: Call this to stop the animation.
     public static func animate(
         interval: TimeInterval = 0.08,
         onFrame: @escaping @Sendable (Int) -> Void
