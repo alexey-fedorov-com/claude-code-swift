@@ -16,10 +16,19 @@ final class EventLoopTests: XCTestCase {
             width: 20, height: 3
         )
         await app.renderInitialFrame()
-        XCTAssertTrue(harness.captured().contains("hi"))
+        let afterInitial = harness.captured()
+        XCTAssertTrue(afterInitial.contains("hi"))
         await app.dispatch(.character("X"))
         await app.renderFrameIfNeeded()
-        XCTAssertTrue(harness.captured().contains("hiX"))
+        let afterUpdate = harness.captured()
+        // The diff path emits only the changed cell ("X") with a cursor positioning
+        // sequence — "hiX" does not appear contiguously in the captured buffer.
+        // Verify the update wrote "X" past the initial frame's content.
+        XCTAssertTrue(afterUpdate.count > afterInitial.count,
+                      "second frame should produce additional output")
+        let delta = String(afterUpdate.dropFirst(afterInitial.count))
+        XCTAssertTrue(delta.contains("X"),
+                      "diff output should contain the new character 'X', got: \(delta.debugDescription)")
     }
 
     func testResizeEventTriggersReflow() async throws {

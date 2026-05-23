@@ -45,8 +45,13 @@ public actor App<State: Sendable> {
 
     public func renderFrameIfNeeded() async {
         let next = renderScreen()
-        let out = ScreenDiff.computeInitial(next: next, styles: styles)
-        await io.write(out)
+        let out: String
+        if let prev = previousScreen, prev.width == next.width, prev.height == next.height {
+            out = ScreenDiff.compute(prev: prev, next: next, styles: styles)
+        } else {
+            out = ScreenDiff.computeInitial(next: next, styles: styles)
+        }
+        if !out.isEmpty { await io.write(out) }
         previousScreen = next
     }
 
