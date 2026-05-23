@@ -66,3 +66,32 @@ No TypeScript files (`*.ts`, `*.tsx`, `package.json`, `bun.lock`, `tsconfig.json
 - System prompt subset ported
 - GitClient, ProcessRunner, MessageQueue, HookRunner all tested and passing
 - No TypeScript runtime files remain in the active source tree
+
+## Terminal UI (added 2026-05-23)
+
+The original line-based REPL was replaced with a real interactive TUI driven
+by `App<ChatScreenState>` in `SwiftCodeTerminalUI`. The user-visible UI now
+mirrors the reference Claude Code for the common path: Welcome banner with
+Clawd ASCII art, bordered rounded prompt input with placeholder + cursor
+text, message transcript above with `>` (user) and `●` (assistant) markers
+and word-wrap, spinner during query, raw-mode + alt-screen + minimal-diff
+repaint.
+
+See `docs/parity/ui-contract.md` for the full component matrix and known
+gaps. Slash command and file `@`-mention autocomplete are planned (Tasks 12
+and 13).
+
+Test coverage added by Tasks 1-11:
+- `AnsiEscapesTests` — 6
+- `StyleTableTests` — 6
+- `ScreenDiffTests` — 4
+- `TextWrapTests` — 7
+- `YogaLayoutTests` — +5 (extended)
+- `ViewSnapshotTests` — 6
+- `WelcomeBannerTests` — 4
+- `EventLoopTests` — 3
+- `PromptInputTests` — 10
+- `MessageRenderingTests` — 6
+- `ChatScreenTests` — 3
+- `DialogTests` — 5
+- **Total: 65 new tests covering the TUI subsystem.**

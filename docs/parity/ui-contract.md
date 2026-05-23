@@ -1,111 +1,107 @@
-# UI Parity Contract
+# Terminal UI Parity Contract
 
-Status: **Scaffolded (Task 10).** Full parity with the reference TypeScript/Ink renderer is aspirational and
-will be built incrementally in Tasks 13–15.
+## Goal
 
----
+The Swift implementation of the terminal UI produces visually equivalent
+output to `.reference` Claude Code for the common interactive paths
+(welcome, prompt input, message rendering, spinner, key dialogs).
 
-## What's Implemented (Task 10)
+## Architectural deviations from reference
 
-### Yoga Layout Engine (`SwiftCodeTerminalUI/Yoga/`)
+The reference TypeScript uses a custom React reconciler ("custom Ink fork")
+with a 5,000-line `REPL.tsx` and ~300 components. A literal 1:1 port is
+months of work. This implementation takes a different approach:
 
-| Feature | Status | Notes |
-|---|---|---|
-| Fixed width / height | ✅ | `Dimension.fixed(Int)` |
-| Auto width / height from content | ✅ | Measures text width |
-| Percent width / height | ✅ | 0.0–1.0 fraction of parent |
-| Padding (EdgeInsets) | ✅ | Top/right/bottom/left |
-| Margin (EdgeInsets) | ✅ | Top/right/bottom/left |
-| FlexDirection: row / column | ✅ | |
-| JustifyContent: start/center/end/spaceBetween/spaceAround | ✅ | |
-| AlignItems: start/center/end/stretch | ✅ | |
-| minWidth / maxWidth | ✅ | |
-| flexGrow | ❌ | Not computed (deferred) |
-| flexShrink | ❌ | Not computed (deferred) |
-| flexBasis | ❌ | Not computed (deferred) |
-| Wrap | ❌ | No line wrapping (deferred) |
-| Absolute positioning | ❌ | Deferred |
+- **No React, no reconciler.** Each frame, the app re-renders the full view
+  tree from immutable state and diffs against the previous frame to emit
+  minimal ANSI updates. See `SwiftCodeTerminalUI/App/App.swift`.
+- **Custom Yoga port.** The flexbox layout calculator
+  (`SwiftCodeTerminalUI/Yoga/`) supports flexDirection, justifyContent,
+  alignItems, alignSelf, padding/margin, gap, flexGrow, percentage widths,
+  and display:none. Not full Yoga spec — additions land as features need
+  them.
+- **Single theme.** Default dark theme baked in. Apple_Terminal and light
+  theme variants from `WelcomeV2.tsx` are not ported.
+- **Event-loop architecture.** A background `Thread` reads raw key events
+  from stdin and posts them to the `App` actor. The actor serializes state
+  mutations and renders. See `SwiftCodeTerminalUI/App/EventLoop.swift`.
 
-### Renderer (`SwiftCodeTerminalUI/Renderer/`)
+## Components shipped
 
-| Feature | Status | Notes |
-|---|---|---|
-| 2D string canvas | ✅ | `Canvas` struct with row×col buffer |
-| Text node rendering at computed position | ✅ | |
-| ANSI color (fg, 30–37, 90–97) | ✅ | `ANSIColor` |
-| ANSI background (bg, 40–47) | ✅ | |
-| Bold / italic / underline / dim | ✅ | |
-| Box border: single / double / rounded | ✅ | |
-| Screen clear + cursor control | ✅ | `TerminalOutput` |
-| Full-screen re-render loop | ✅ | `renderFrame()` |
-| Cursor-positioned streaming writes | ❌ | Canvas approach used instead |
-| True color (RGB) | ❌ | Deferred |
-| 256-color palette | ❌ | Deferred |
-| Wide character (CJK/emoji) width | ❌ | Deferred |
-| ANSI stripping | ❌ | Deferred |
+| Component | File | Test |
+|-----------|------|------|
+| Screen + ANSIRenderer (diff) | `Renderer/Screen.swift`, `Renderer/ScreenDiff.swift`, `Renderer/ANSIEscapes.swift` | `ScreenDiffTests`, `AnsiEscapesTests`, `StyleTableTests` |
+| Text wrap (word-aware, CJK width) | `Renderer/TextWrap.swift` | `TextWrapTests` |
+| Yoga layout (flex, gap, alignSelf, display) | `Yoga/*.swift` | `YogaLayoutTests` |
+| Theme tokens (Claude orange + 8 semantic) | `Theme/Theme.swift` | `ViewSnapshotTests` |
+| Box, Text, Spinner, Newline, Spacer | `Components/Box.swift`, `Text.swift`, `Spinner.swift`, `Newline.swift`, `Spacer.swift` | `ViewSnapshotTests` |
+| App actor + EventLoop + AppLifecycle | `App/App.swift`, `App/EventLoop.swift`, `App/AppLifecycle.swift` | `EventLoopTests` |
+| Welcome banner (dark Clawd ASCII) | `Components/Welcome/clawd-art.swift`, `WelcomeBanner.swift` | `WelcomeBannerTests` |
+| PromptInput + Cursor + Footer | `Components/PromptInput/*.swift` | `PromptInputTests` |
+| Message renderers (User, Assistant, System, List) | `Components/Messages/*.swift` | `MessageRenderingTests` |
+| ChatScreen composition | `ChatScreen.swift` | `ChatScreenTests` |
+| Confirm + PermissionRequest dialogs | `Components/Dialogs/*.swift` | `DialogTests` |
+| InteractiveREPL (TUI-driven) | `SwiftCodeCLI/InteractiveREPL.swift` | (smoke-tested manually) |
 
-### Events (`SwiftCodeTerminalUI/Events/`)
+## Deferred (known scope omissions)
 
-| Feature | Status | Notes |
-|---|---|---|
-| ASCII characters | ✅ | |
-| Control characters (Ctrl+A–Z) | ✅ | |
-| Escape | ✅ | |
-| Arrow keys (CSI + SS3) | ✅ | |
-| Shift+arrows | ✅ | |
-| Backspace / Delete | ✅ | |
-| Function keys F1–F12 | ✅ | |
-| Focus / blur | ✅ | ESC[I / ESC[O |
-| Bracketed paste (ESC[200~…ESC[201~) | ✅ | |
-| Window resize (SIGWINCH) | ❌ | Signal handler deferred |
-| Mouse events | ❌ | Deferred |
-| Non-blocking read loop | ❌ | Uses blocking read(); wrap in Task for async |
-| Raw mode enable/disable | ✅ | `TerminalRawMode` (POSIX) |
+These reference components are not yet ported. Each is a future task before
+the corresponding flow can ship:
 
-### Components (`SwiftCodeTerminalUI/Components/`)
+- **Welcome banner variants.** Light theme, Apple_Terminal-specific layout.
+- **PromptInput sub-features.** Vim mode, IDE selection mentions, paste image
+  refs, fast mode picker, thinking toggle, history search, command suggestions
+  *with fuzzy matching* (prefix-only ships in Task 12).
+- **Slash command autocomplete** (Task 12 — planned).
+- **File `@`-mention autocomplete** (Task 13 — planned).
+- **MessageSelector** (resume / jump-to).
+- **HighlightedCode** (markdown rendering + syntax highlighting).
+- **FileEditToolDiff** (per-tool result UI for diffs).
+- **AgentProgressLine**, **CoordinatorAgentStatus**, **Tasks dialog**.
+- **MCP elicitation dialog**, **OAuth flow UI**, **Bridge dialog**.
+- **ResumeConversation**, **ExportDialog**, **ExitFlow**.
+- **Notifications surface** (`PromptInput/Notifications.tsx`).
+- **Streaming output rendering.** Assistant text currently lands all-at-once
+  after the response completes; the reference streams character-by-character.
 
-| Component | Status | Notes |
-|---|---|---|
-| TextComponent | ✅ | Text with ANSI styling |
-| BoxComponent | ✅ | Flex container + optional border |
-| Spinner | ✅ | Braille frames, label, optional color |
-| SelectInput | ❌ | Task 15 |
-| TextInput | ❌ | Task 15 |
-| Confirm | ❌ | Task 15 |
-| MultiSelect | ❌ | Task 15 |
+## Snapshot normalization
 
----
+Tests use `renderViewToScreen(view, width:, height:)` which produces a
+deterministic `Screen` of cells (character + style id). Test code converts
+to a row-wise text representation for assertions.
 
-## Reference: TypeScript/Ink Renderer
+- Trailing spaces stripped before comparison
+- Cursor position not embedded (handled by App's terminal cursor positioning)
+- Spinner frame fixed via explicit `frameIndex:` parameter
+- Dynamic strings (version, cwd) passed in as parameters so tests stay
+  reproducible
 
-The reference implementation is a custom React-compatible terminal renderer in
-`.reference/src/ink/` with ~100 component files under `.reference/src/components/`.
+## Known limitations
 
-### Key differences vs reference
+- `WrappedTextView` mutates `layoutHeight` during paint after Yoga's layout
+  pass. Acceptable for transcripts (each message followed by NewlineView)
+  but parents that read child layout heights post-paint may see stale
+  values. A proper measure phase is a future task.
+- `EventLoop.stop()` sets a flag but doesn't unblock the reader thread
+  (blocking `read()`). Acceptable because shutdown happens via signal
+  handlers (`AppLifecycle.installSignalHandlers`), not graceful stop.
+- `SuggestionOverlay` is shipped as a primitive but not yet wired to the
+  PromptInput (Tasks 12 and 13 will wire it).
 
-1. **No React/hooks**: The Swift implementation is imperative — callers build `YogaNode` trees
-   directly and run `YogaCalculator.calculate(root:availableWidth:availableHeight:)`.
+## Implementation summary
 
-2. **No virtual DOM / reconciliation**: There is no diff engine. Full re-renders repaint
-   the entire canvas. This is fine for a first pass.
+11 tasks completed (Tasks 1-11 of `docs/superpowers/plans/2026-05-23-terminal-ui-parity.md`):
 
-3. **No state management**: No `useState` / `useEffect` / `useReducer`. State lives in the
-   caller; they rebuild the node tree and re-render each frame.
-
-4. **2D buffer vs streaming cursor writes**: The reference emits cursor-positioned escape
-   codes incrementally. The Swift renderer uses a 2D `Canvas`, then joins rows with `\n`.
-   This is simpler but may flicker on large terminals — addressed by `clearAndHome()` in
-   `TerminalOutput`.
-
----
-
-## Path to Full Parity
-
-- **Task 13** — port tool-specific UI components (progress bars, diffs, file lists)
-- **Task 14** — slash command UI (command palette, autocomplete)
-- **Task 15** — interactive REPL loop: wraps `InputReader`, drives re-render loop,
-  builds full-screen TUI on top of this scaffold
-- **Task 16** — output styles (cost display, thinking blocks, code blocks, streaming)
-
-The current scaffold in Task 10 is intentionally minimal. It provides the lowest layer that
-Tasks 13–16 can build on without pulling in React, SwiftUI, or any third-party UI framework.
+| # | Task | Commit |
+|---|------|--------|
+| 1 | Screen buffer + ANSI diff renderer | `891a986` (+ `5475c86` lock fix) |
+| 2 | Text wrap + width measurement | `be0d144` |
+| 3 | Yoga extensions | `b862ffa` |
+| 4 | Theme + View protocol + Box/Text/Spinner | `1e04179` |
+| 5 | App actor + EventLoop + Lifecycle | `f798253` (+ `5703051` diff path) |
+| 6 | Welcome banner | `668c90a` (+ `01bafa9` t16 width fix) |
+| 7 | PromptInput | `e476107` |
+| 8 | Message renderers | `766bd61` |
+| 9 | ChatScreen + REPL rewrite | `8fbb2c6` |
+| 10 | Dialogs | `bd2c34b` |
+| 11 | Contract doc + verification | (this commit) |
