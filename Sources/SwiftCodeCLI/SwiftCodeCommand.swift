@@ -1,6 +1,9 @@
 import ArgumentParser
 import Foundation
 import SwiftCodeCore
+import SwiftCodeAPI
+import SwiftCodeAgent
+import SwiftCodeCommands
 
 public struct SwiftCodeCommand: AsyncParsableCommand {
     public static let configuration = CommandConfiguration(
@@ -481,10 +484,57 @@ public struct SwiftCodeCommand: AsyncParsableCommand {
             return
         }
 
-        if printMode {
-            FileHandle.standardOutput.write(Data("Swift rewrite scaffold\n".utf8))
+        // Resolve output format (defaults to text)
+        let format: OutputFormat
+        if let rawFormat = outputFormat {
+            format = OutputFormat.parse(rawFormat) ?? .text
         } else {
-            FileHandle.standardOutput.write(Data("Swift rewrite scaffold\n".utf8))
+            format = .text
+        }
+
+        if printMode {
+            // Non-interactive print mode: one prompt → response → exit
+            let promptText: String
+            if let p = prompt, !p.isEmpty {
+                promptText = p
+            } else {
+                // No prompt argument → exit with usage error
+                fputs("error: --print/-p requires a prompt argument\n", stderr)
+                throw ExitCode(1)
+            }
+
+            let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+            let resolvedModel = model ?? "claude-opus-4-6"
+            let io = StructuredIO(format: format)
+
+            let exitCode = await PrintMode.run(
+                prompt: promptText,
+                outputFormat: format,
+                model: resolvedModel,
+                systemPrompt: systemPrompt,
+                apiKey: apiKey,
+                io: io
+            )
+            throw ExitCode(exitCode)
+
+        } else {
+            // Interactive REPL mode
+            let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+            let resolvedModel = model ?? "claude-opus-4-6"
+            let client = AnthropicClient(apiKey: apiKey)
+            let registry = CommandRegistry.defaultRegistry()
+
+            let repl = InteractiveREPL(
+                client: client,
+                registry: registry,
+                model: resolvedModel,
+                systemPrompt: systemPrompt
+            )
+
+            // If a prompt is given in non-print mode, treat it as the first user message
+            // and echo it in the banner area before starting the loop.
+            let exitCode = await repl.run()
+            throw ExitCode(exitCode)
         }
     }
 

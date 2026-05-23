@@ -41,6 +41,9 @@ let package = Package(
             name: "SwiftCodeCLI",
             dependencies: [
                 "SwiftCodeCore",
+                "SwiftCodeAPI",
+                "SwiftCodeAgent",
+                "SwiftCodeCommands",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),
@@ -59,7 +62,7 @@ let package = Package(
         .target(name: "SwiftCodeRemote", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodeAgent", .product(name: "NIOCore", package: "swift-nio")]),
         .target(name: "SwiftCodeVim", dependencies: ["SwiftCodeCore"]),
         .target(name: "SwiftCodeNative", dependencies: ["SwiftCodeCore", .product(name: "Crypto", package: "swift-crypto")]),
-        .testTarget(name: "SwiftCodeCLITests", dependencies: ["SwiftCodeCLI"]),
+        .testTarget(name: "SwiftCodeCLITests", dependencies: ["SwiftCodeCLI", "SwiftCodeAgent", "SwiftCodeAPI", "SwiftCodeCommands"]),
         .testTarget(name: "SwiftCodeCoreTests", dependencies: ["SwiftCodeCore"]),
         .testTarget(name: "SwiftCodeAPITests", dependencies: ["SwiftCodeAPI"]),
         .testTarget(name: "SwiftCodeAgentTests", dependencies: ["SwiftCodeAgent"]),
