@@ -33,6 +33,12 @@ public final class EventLoop: @unchecked Sendable {
         self.thread = t
     }
 
+    /// Sets the stop flag; the reader thread observes it on its next loop iteration.
+    /// Known limitation: `InputReader.next()` is a blocking `read()` — the thread
+    /// won't actually exit until stdin produces a byte. Acceptable for our usage:
+    /// shutdown happens via SIGINT/SIGTERM/atexit (see `AppLifecycle`), not via
+    /// `stop()`. If clean teardown becomes necessary, pipe a wake byte to stdin or
+    /// switch the reader to non-blocking I/O.
     public func stop() {
         stopFlag.lock()
         _stopped = true
