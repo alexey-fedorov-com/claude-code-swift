@@ -37,4 +37,13 @@ final class WelcomeBannerTests: XCTestCase {
     func testWelcomeBannerWidthIs58() {
         XCTAssertEqual(ClawdArt.width, 58)
     }
+
+    func testEveryArtRowIsExactlyBannerWidth() {
+        let rows = ClawdArt.darkRows(theme: .default)
+        for (i, spans) in rows.enumerated() {
+            let totalChars = spans.reduce(0) { $0 + $1.text.count }
+            XCTAssertEqual(totalChars, ClawdArt.width,
+                           "row \(i) must be exactly \(ClawdArt.width) chars; got \(totalChars)")
+        }
+    }
 }
