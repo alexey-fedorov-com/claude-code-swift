@@ -49,15 +49,19 @@ public struct CellStyle: Hashable, Sendable {
     }
 }
 
+import Foundation
+
 // Named CellStyleTable to avoid collision with the ApplicationServices C struct StyleTable.
 public final class CellStyleTable: @unchecked Sendable {
     public typealias StyleID = Int
+    private let lock = NSLock()
     private var styleToId: [CellStyle: StyleID] = [.default: 0]
     private var idToStyle: [CellStyle] = [.default]
 
     public init() {}
 
     public func id(for style: CellStyle) -> StyleID {
+        lock.lock(); defer { lock.unlock() }
         if let id = styleToId[style] { return id }
         let id = idToStyle.count
         idToStyle.append(style)
@@ -66,6 +70,7 @@ public final class CellStyleTable: @unchecked Sendable {
     }
 
     public func style(for id: StyleID) -> CellStyle {
+        lock.lock(); defer { lock.unlock() }
         guard id >= 0 && id < idToStyle.count else { return .default }
         return idToStyle[id]
     }
