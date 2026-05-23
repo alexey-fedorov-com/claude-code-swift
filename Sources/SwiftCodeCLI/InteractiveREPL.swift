@@ -53,10 +53,16 @@ public actor InteractiveREPL {
         defer { AppLifecycle.leave() }
 
         let size = AppLifecycle.terminalSize()
+        let availableCommandsList = await registry.availableCommands(antUser: false, demoMode: false)
+        let commandSuggestions = availableCommandsList.map { cmd in
+            CommandSuggestion(name: cmd.name, description: cmd.description)
+        }
         let initialState = ChatScreenState(
             version: SwiftCodeVersion.value,
             cwd: FileManager.default.currentDirectoryPath,
-            width: size.width
+            width: size.width,
+            availableCommands: commandSuggestions,
+            workingDirectory: FileManager.default.currentDirectoryPath
         )
 
         let app = App<ChatScreenState>(

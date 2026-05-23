@@ -8,6 +8,13 @@ public enum ChatMessage: Sendable, Equatable {
     case system(String)
 }
 
+// MARK: - SuggestionTriggerKind
+
+public enum SuggestionTriggerKind: Sendable, Equatable {
+    case slash(SlashTrigger)
+    // case atMention(AtMentionTrigger)  // wired in Task 13
+}
+
 // MARK: - ChatScreenState
 
 public struct ChatScreenState: Sendable, Equatable {
@@ -20,6 +27,13 @@ public struct ChatScreenState: Sendable, Equatable {
     public var cwd: String?
     public var width: Int      // current terminal width (for prompt input sizing)
 
+    // Suggestion / autocomplete state
+    public var suggestions: [SuggestionItem] = []
+    public var suggestionSelectedIndex: Int = 0
+    public var suggestionTrigger: SuggestionTriggerKind? = nil
+    public var availableCommands: [CommandSuggestion] = []
+    public var workingDirectory: String = FileManager.default.currentDirectoryPath
+
     public init(version: String,
                 messages: [ChatMessage] = [],
                 cursor: TextCursor = TextCursor(),
@@ -27,7 +41,9 @@ public struct ChatScreenState: Sendable, Equatable {
                 spinnerFrame: Int = 0,
                 modeLabel: String? = nil,
                 cwd: String? = nil,
-                width: Int = 80) {
+                width: Int = 80,
+                availableCommands: [CommandSuggestion] = [],
+                workingDirectory: String = FileManager.default.currentDirectoryPath) {
         self.version = version
         self.messages = messages
         self.cursor = cursor
@@ -36,6 +52,8 @@ public struct ChatScreenState: Sendable, Equatable {
         self.modeLabel = modeLabel
         self.cwd = cwd
         self.width = width
+        self.availableCommands = availableCommands
+        self.workingDirectory = workingDirectory
     }
 }
 
@@ -79,6 +97,14 @@ public struct ChatScreen: View {
             placeholder: "Try \"how does this work?\"",
             width: state.width
         ))
+
+        if !state.suggestions.isEmpty {
+            rows.append(SuggestionOverlay(
+                items: state.suggestions,
+                selectedIndex: state.suggestionSelectedIndex,
+                width: state.width
+            ))
+        }
 
         rows.append(PromptInputFooter(
             modeLabel: state.modeLabel,

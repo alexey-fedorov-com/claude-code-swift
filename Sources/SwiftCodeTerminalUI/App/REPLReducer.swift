@@ -5,6 +5,42 @@ public enum REPLReducer {
     /// (Enter on a non-empty cursor) that the caller should dispatch to the model.
     @discardableResult
     public static func apply(event: InputEvent, to state: inout ChatScreenState) -> Bool {
+        // When suggestions are active, route navigation/confirm/dismiss keys first.
+        if state.suggestionTrigger != nil {
+            switch event {
+            case .arrowUp:
+                state.suggestionSelectedIndex = max(0, state.suggestionSelectedIndex - 1)
+                return false
+            case .arrowDown:
+                state.suggestionSelectedIndex = min(
+                    state.suggestions.count - 1,
+                    state.suggestionSelectedIndex + 1
+                )
+                return false
+            case .escape:
+                state.suggestions = []
+                state.suggestionTrigger = nil
+                state.suggestionSelectedIndex = 0
+                return false
+            case .tab:
+                applySelectedSuggestion(state: &state)
+                return false
+            case .character(let c) where c == "\t":
+                applySelectedSuggestion(state: &state)
+                return false
+            case .enter:
+                // Enter inserts the highlighted suggestion (not a submit)
+                applySelectedSuggestion(state: &state)
+                return false
+            case .character(let c) where c == "\n" || c == "\r":
+                applySelectedSuggestion(state: &state)
+                return false
+            default:
+                break
+            }
+        }
+
+        // Normal input handling
         switch event {
         case .character(let c):
             if c == "\n" || c == "\r" {
@@ -28,6 +64,47 @@ public enum REPLReducer {
         default:
             break
         }
+
+        recomputeSuggestions(state: &state)
         return false
+    }
+
+    // MARK: - Internal helpers (internal so tests can call them if needed)
+
+    static func recomputeSuggestions(state: inout ChatScreenState) {
+        if let slash = SlashCommandSuggestions.detectTrigger(
+            text: state.cursor.text,
+            cursorOffset: state.cursor.offset
+        ) {
+            state.suggestionTrigger = .slash(slash)
+            state.suggestions = SlashCommandSuggestions
+                .filter(prefix: slash.prefix, commands: state.availableCommands)
+                .prefix(20)
+                .map { .command($0) }
+        } else {
+            state.suggestions = []
+            state.suggestionTrigger = nil
+        }
+        if state.suggestionSelectedIndex >= state.suggestions.count {
+            state.suggestionSelectedIndex = 0
+        }
+    }
+
+    static func applySelectedSuggestion(state: inout ChatScreenState) {
+        guard state.suggestionSelectedIndex < state.suggestions.count else { return }
+        let pick = state.suggestions[state.suggestionSelectedIndex]
+        switch (state.suggestionTrigger, pick) {
+        case (.slash(let trig)?, .command(let cmd)):
+            state.cursor = SlashCommandSuggestions.apply(
+                cursor: state.cursor,
+                trigger: trig,
+                selection: cmd
+            )
+        default:
+            break
+        }
+        state.suggestions = []
+        state.suggestionTrigger = nil
+        state.suggestionSelectedIndex = 0
     }
 }
