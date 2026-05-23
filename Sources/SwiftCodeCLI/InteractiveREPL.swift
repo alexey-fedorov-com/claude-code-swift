@@ -1,15 +1,15 @@
 // InteractiveREPL.swift
 // SwiftCodeCLI
 //
-// Interactive REPL loop.
-// Reads lines from stdin, dispatches slash commands or sends queries to the model.
-// Mirrors the main REPL in .reference/src/screens/REPL.tsx (headless / line-based port).
+// TUI interactive REPL — composes ChatScreen + App<ChatScreenState> + EventLoop.
+// Replaces the old readLine-based loop with a full terminal UI.
 
 import Foundation
 import SwiftCodeCore
 import SwiftCodeAPI
 import SwiftCodeAgent
 import SwiftCodeCommands
+import SwiftCodeTerminalUI
 
 // MARK: - REPLError
 
@@ -20,10 +20,6 @@ public enum REPLError: Error, Sendable {
 
 // MARK: - InteractiveREPL
 
-/// Line-based interactive REPL.
-///
-/// Reads prompts from stdin, dispatches slash commands via `CommandRegistry`,
-/// sends non-slash input to `QueryEngine`, and prints responses to stdout.
 public actor InteractiveREPL {
 
     // MARK: - State
@@ -33,7 +29,6 @@ public actor InteractiveREPL {
     private let model: String
     private let systemPrompt: String?
     private var conversationHistory: [Message] = []
-    private let io: StructuredIO
 
     // MARK: - Init
 
@@ -41,186 +36,145 @@ public actor InteractiveREPL {
         client: any AnthropicAPI,
         registry: CommandRegistry? = nil,
         model: String = "claude-opus-4-6",
-        systemPrompt: String? = nil,
-        io: StructuredIO = StructuredIO(format: .text)
+        systemPrompt: String? = nil
     ) {
         self.client = client
         self.registry = registry ?? CommandRegistry.defaultRegistry()
         self.model = model
         self.systemPrompt = systemPrompt
-        self.io = io
     }
 
     // MARK: - Run
 
-    /// Start the interactive REPL. Returns when the user exits.
+    /// Start the interactive TUI REPL. Returns when the user exits.
     public func run() async -> Int32 {
-        printBanner()
+        AppLifecycle.installSignalHandlers()
+        AppLifecycle.enter()
+        defer { AppLifecycle.leave() }
 
-        while true {
-            // Print prompt indicator
-            printPrompt()
+        let size = AppLifecycle.terminalSize()
+        let initialState = ChatScreenState(
+            version: SwiftCodeVersion.value,
+            cwd: FileManager.default.currentDirectoryPath,
+            width: size.width
+        )
 
-            // Read line from stdin
-            guard let line = readLine(strippingNewline: true) else {
-                // EOF / Ctrl+D — exit gracefully
-                printLine("\nGoodbye.")
-                return 0
-            }
+        let app = App<ChatScreenState>(
+            initialState: initialState,
+            view: { state in ChatScreen(state: state) },
+            update: { event, state in _ = REPLReducer.apply(event: event, to: &state) },
+            io: FileHandleIO(),
+            width: size.width,
+            height: size.height
+        )
+        await app.renderInitialFrame()
 
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // Channel for exit-code signaling (Ctrl-C or /exit)
+        let (stream, continuation) = AsyncStream<Int32>.makeStream()
 
-            // Skip empty input
-            if trimmed.isEmpty { continue }
-
-            // Dispatch slash command or query
-            if trimmed.hasPrefix("/") {
-                let exitCode = await handleSlashCommand(trimmed)
-                if let code = exitCode {
-                    return code
+        // Spinner ticker — fires every 80ms while running
+        let spinnerTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await app.tickSpinner()
+                // Sync spinner frame into state so ChatScreen renders it
+                let frame = await app.currentSpinnerFrame()
+                await app.withState { state in
+                    state.spinnerFrame = frame
                 }
-            } else {
-                await handleQuery(trimmed)
+                await app.renderFrameIfNeeded()
             }
         }
-    }
 
-    // MARK: - Slash Command Dispatch
+        let modelCopy = model
+        let systemPromptCopy = systemPrompt
+        let clientCopy = client
 
-    /// Parse and execute a slash command. Returns exit code if REPL should stop, nil to continue.
-    private func handleSlashCommand(_ input: String) async -> Int32? {
-        // Strip leading "/"
-        let withoutSlash = String(input.dropFirst())
-
-        // Split on first space: command name + rest
-        let parts = withoutSlash.split(separator: " ", maxSplits: 1)
-        let commandName = parts.isEmpty ? "" : String(parts[0]).lowercased()
-        let commandInput = parts.count > 1 ? String(parts[1]) : ""
-
-        let context = makeContext()
-
-        guard let command = await registry.lookup(name: commandName) else {
-            printLine("Unknown command: /\(commandName). Type /help for a list of commands.")
-            return nil
-        }
-
-        do {
-            let result = try await command.execute(input: commandInput, context: context)
-            return handle(result: result)
-        } catch {
-            printLine("Command error: \(error)")
-            return nil
-        }
-    }
-
-    /// Handle a `SlashCommandResult`. Returns exit code if REPL should stop, nil to continue.
-    private func handle(result: SlashCommandResult) -> Int32? {
-        switch result {
-        case .message(let text):
-            printLine(text)
-            return nil
-
-        case .exit(let code):
-            printLine("Exiting...")
-            return code
-
-        case .clearContext:
-            conversationHistory = []
-            printLine("Conversation cleared.")
-            return nil
-
-        case .setModel(let newModel):
-            // Model change is noted — in a full implementation we'd update state
-            printLine("Model set to: \(newModel)")
-            return nil
-
-        case .promptInjection(let text):
-            // Treat injected text as a user query
-            Task {
-                await handleQuery(text)
+        // Event loop: reads raw key events on a background thread
+        let loop = EventLoop(onEvent: { event in
+            Task { [continuation] in
+                // Handle Ctrl-C immediately
+                if case .controlChar(let c) = event, c == "c" {
+                    continuation.yield(0)
+                    return
+                }
+                // Snapshot whether this is a submit before mutating state.
+                // We use a nonisolated container to pass the result out of the @Sendable closure.
+                final class SubmitResult: @unchecked Sendable {
+                    var didSubmit = false
+                    var submittedText = ""
+                }
+                let result = SubmitResult()
+                await app.withState { state in
+                    let submitted = REPLReducer.apply(event: event, to: &state)
+                    result.didSubmit = submitted
+                    if submitted {
+                        result.submittedText = state.cursor.text
+                        state.messages.append(.user(result.submittedText))
+                        state.cursor = TextCursor()
+                        state.isLoading = true
+                    }
+                }
+                await app.renderFrameIfNeeded()
+                if result.didSubmit {
+                    let submittedText = result.submittedText
+                    // Check for exit commands
+                    if submittedText == "/exit" || submittedText == "/quit" {
+                        continuation.yield(0)
+                        return
+                    }
+                    // Dispatch to model in background
+                    Task {
+                        await Self.dispatchQuery(
+                            text: submittedText,
+                            app: app,
+                            client: clientCopy,
+                            model: modelCopy,
+                            systemPrompt: systemPromptCopy
+                        )
+                    }
+                }
             }
-            return nil
+        })
+        loop.start()
 
-        case .noop:
-            return nil
+        var exitCode: Int32 = 0
+        for await code in stream {
+            exitCode = code
+            break
         }
+        spinnerTask.cancel()
+        loop.stop()
+        return exitCode
     }
 
     // MARK: - Query Dispatch
 
-    private func handleQuery(_ userInput: String) async {
-        // Build message history
-        let userMsg = UserMessage(uuid: UUID().uuidString, content: .text(userInput), isMeta: false)
-        conversationHistory.append(.user(userMsg))
-
+    private static func dispatchQuery(
+        text: String,
+        app: App<ChatScreenState>,
+        client: any AnthropicAPI,
+        model: String,
+        systemPrompt: String?
+    ) async {
         let engine = QueryEngine(client: client, model: model)
-
         do {
-            let assistantMessage: AssistantMessage
-            if conversationHistory.count == 1 {
-                // First turn: simple single-message query
-                assistantMessage = try await engine.run(
-                    userMessage: userInput,
-                    systemPrompt: systemPrompt
-                )
-            } else {
-                // Multi-turn: pass full history
-                assistantMessage = try await engine.run(
-                    messages: conversationHistory,
-                    systemPrompt: systemPrompt
-                )
-            }
-
-            // Append assistant message to history
-            conversationHistory.append(.assistant(assistantMessage))
-
-            // Print response
-            let text = assistantMessage.content.compactMap { block -> String? in
+            let response = try await engine.run(userMessage: text, systemPrompt: systemPrompt)
+            let assistantText = response.content.compactMap { block -> String? in
                 if case .text(let t) = block { return t }
                 return nil
             }.joined()
-
-            printLine(text)
-
+            await app.withState { state in
+                state.messages.append(.assistant(assistantText))
+                state.isLoading = false
+            }
         } catch {
-            printLine("Error: \(error)")
-            // Remove the user message from history on error so it's not retried
-            conversationHistory.removeLast()
+            await app.withState { state in
+                state.messages.append(.system("Error: \(error)"))
+                state.isLoading = false
+            }
         }
-    }
-
-    // MARK: - Context
-
-    private func makeContext() -> SlashCommandContext {
-        SlashCommandContext(
-            sessionId: UUID().uuidString,
-            workingDirectory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-            currentModel: model,
-            isAntUser: false,
-            isDemoMode: false
-        )
-    }
-
-    // MARK: - Output Helpers
-
-    private func printBanner() {
-        printLine("╔══════════════════════════════╗")
-        printLine("║   SwiftCode (Claude Code)    ║")
-        printLine("║   Type /help for commands    ║")
-        printLine("║   Ctrl+D to exit             ║")
-        printLine("╚══════════════════════════════╝")
-        printLine("")
-    }
-
-    private func printPrompt() {
-        // Print without newline — user types on same line
-        let data = Data("> ".utf8)
-        FileHandle.standardOutput.write(data)
-    }
-
-    private func printLine(_ text: String) {
-        let data = Data((text + "\n").utf8)
-        FileHandle.standardOutput.write(data)
+        await app.renderFrameIfNeeded()
     }
 }
 

@@ -44,6 +44,7 @@ let package = Package(
                 "SwiftCodeAPI",
                 "SwiftCodeAgent",
                 "SwiftCodeCommands",
+                "SwiftCodeTerminalUI",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),

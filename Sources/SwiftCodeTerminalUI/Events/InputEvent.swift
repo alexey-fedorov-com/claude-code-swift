@@ -1,5 +1,5 @@
 /// All input events the terminal can produce.
-public enum InputEvent: Equatable {
+public enum InputEvent: Equatable, Sendable {
     // Printable characters
     case character(Character)
 
