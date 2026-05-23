@@ -50,10 +50,13 @@ the corresponding flow can ship:
 
 - **Welcome banner variants.** Light theme, Apple_Terminal-specific layout.
 - **PromptInput sub-features.** Vim mode, IDE selection mentions, paste image
-  refs, fast mode picker, thinking toggle, history search, command suggestions
-  *with fuzzy matching* (prefix-only ships in Task 12).
-- **Slash command autocomplete** (Task 12 — planned).
-- **File `@`-mention autocomplete** (Task 13 — planned).
+  refs, fast mode picker, thinking toggle, history search, *fuzzy* command
+  suggestions (prefix-only shipped in Task 12).
+- ~~**Slash command autocomplete**~~ — shipped (Task 12). Prefix-match against
+  registered commands; Up/Down/Tab/Enter routing in the reducer.
+- ~~**File `@`-mention autocomplete**~~ — shipped (Task 13). Filesystem walk via
+  `SwiftCodeNative.PathCompletion`; directories insert with trailing `/`, files
+  with trailing space. No LRU cache (single shallow scan per keystroke).
 - **MessageSelector** (resume / jump-to).
 - **HighlightedCode** (markdown rendering + syntax highlighting).
 - **FileEditToolDiff** (per-tool result UI for diffs).
@@ -90,7 +93,7 @@ to a row-wise text representation for assertions.
 
 ## Implementation summary
 
-11 tasks completed (Tasks 1-11 of `docs/superpowers/plans/2026-05-23-terminal-ui-parity.md`):
+13 tasks completed (Tasks 1-13 of `docs/superpowers/plans/2026-05-23-terminal-ui-parity.md`):
 
 | # | Task | Commit |
 |---|------|--------|
@@ -98,10 +101,12 @@ to a row-wise text representation for assertions.
 | 2 | Text wrap + width measurement | `be0d144` |
 | 3 | Yoga extensions | `b862ffa` |
 | 4 | Theme + View protocol + Box/Text/Spinner | `1e04179` |
-| 5 | App actor + EventLoop + Lifecycle | `f798253` (+ `5703051` diff path) |
+| 5 | App actor + EventLoop + Lifecycle | `f798253` (+ `5703051` diff path, `68a0893` doc) |
 | 6 | Welcome banner | `668c90a` (+ `01bafa9` t16 width fix) |
 | 7 | PromptInput | `e476107` |
 | 8 | Message renderers | `766bd61` |
 | 9 | ChatScreen + REPL rewrite | `8fbb2c6` |
 | 10 | Dialogs | `bd2c34b` |
-| 11 | Contract doc + verification | (this commit) |
+| 11 | Contract doc + verification | `bb01de7` |
+| 12 | Slash command autocomplete | `2aba2c1` |
+| 13 | File `@`-mention autocomplete | `a5e8d33` |
