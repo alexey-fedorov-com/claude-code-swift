@@ -47,7 +47,11 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),
-        .target(name: "SwiftCodeCore", dependencies: [.product(name: "Logging", package: "swift-log")]),
+        .target(
+            name: "SwiftCodeCore",
+            dependencies: [.product(name: "Logging", package: "swift-log")],
+            resources: [.copy("Resources")]
+        ),
         .target(name: "SwiftCodeAPI", dependencies: ["SwiftCodeCore", .product(name: "AsyncHTTPClient", package: "async-http-client")]),
         .target(name: "SwiftCodeAgent", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodeNative"]),
         .target(name: "SwiftCodeTerminalUI", dependencies: ["SwiftCodeCore", .product(name: "NIOCore", package: "swift-nio")]),
@@ -55,7 +59,7 @@ let package = Package(
         .target(name: "SwiftCodeCommands", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodeTools", "SwiftCodeTerminalUI"]),
         .target(name: "SwiftCodeSettings", dependencies: ["SwiftCodeCore"]),
         .target(name: "SwiftCodePermissions", dependencies: ["SwiftCodeCore", "SwiftCodeSettings"]),
-        .target(name: "SwiftCodeHooks", dependencies: ["SwiftCodeCore", "SwiftCodeSettings"]),
+        .target(name: "SwiftCodeHooks", dependencies: ["SwiftCodeCore", "SwiftCodeSettings", "SwiftCodeNative"]),
         .target(name: "SwiftCodePlugins", dependencies: ["SwiftCodeCore", "SwiftCodeSettings", "SwiftCodeHooks"]),
         .target(name: "SwiftCodeMCP", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodePermissions", .product(name: "NIOCore", package: "swift-nio")]),
         .target(name: "SwiftCodeLSP", dependencies: ["SwiftCodeCore", .product(name: "NIOCore", package: "swift-nio")]),
@@ -71,7 +75,7 @@ let package = Package(
         .testTarget(name: "SwiftCodeCommandsTests", dependencies: ["SwiftCodeCommands", "SwiftCodeAPI"]),
         .testTarget(name: "SwiftCodeSettingsTests", dependencies: ["SwiftCodeSettings"]),
         .testTarget(name: "SwiftCodePermissionsTests", dependencies: ["SwiftCodePermissions"]),
-        .testTarget(name: "SwiftCodeHooksTests", dependencies: ["SwiftCodeHooks"]),
+        .testTarget(name: "SwiftCodeHooksTests", dependencies: ["SwiftCodeHooks", "SwiftCodeNative"]),
         .testTarget(name: "SwiftCodePluginsTests", dependencies: ["SwiftCodePlugins"]),
         .testTarget(name: "SwiftCodeMCPTests", dependencies: ["SwiftCodeMCP"]),
         .testTarget(name: "SwiftCodeLSPTests", dependencies: ["SwiftCodeLSP"]),
