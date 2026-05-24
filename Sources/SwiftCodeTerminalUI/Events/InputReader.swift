@@ -85,8 +85,13 @@ public final class InputReader: @unchecked Sendable {
         switch byte {
         case 0x00:
             return .controlChar("@")
+        case 0x09:
+            return .tab
+        case 0x0A, 0x0D:
+            return .enter
         case 0x01...0x1A:
-            // Ctrl+A (1) through Ctrl+Z (26)
+            // Ctrl+A (1) through Ctrl+Z (26). Tab (0x09), LF (0x0A),
+            // and CR (0x0D) are handled above as their semantic keys.
             let offset = byte - 0x01
             let scalar = Unicode.Scalar(UInt32(UInt8(ascii: "a") + offset))!
             let letter = Character(scalar)

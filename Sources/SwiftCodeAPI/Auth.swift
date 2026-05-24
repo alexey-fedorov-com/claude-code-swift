@@ -109,22 +109,24 @@ public struct EnvAuthProvider: AuthProvider {
     }
 }
 
-// MARK: - KeychainAuthProvider (Stub)
+// MARK: - KeychainAuthProvider
 
-/// Reads an API key or OAuth token from the macOS Keychain.
-/// The actual implementation defers to SwiftCodeNative.SecureStorage.
-/// TODO: Wire up real keychain access when SwiftCodeNative is available.
+/// Reads an API key or OAuth token from the macOS Keychain via `CredentialStore`.
 public struct KeychainAuthProvider: AuthProvider {
-    private let serviceName: String
+    private let store: CredentialStore
 
-    public init(serviceName: String = "com.anthropic.claude-code") {
-        self.serviceName = serviceName
+    public init(store: CredentialStore = CredentialStore()) {
+        self.store = store
     }
 
     public func credentials() async throws -> ApiCredentials {
-        // TODO: implement via SwiftCodeNative.SecureStorage
-        // For now, fall through to env-based auth.
-        return ApiCredentials()
+        guard let stored = try store.load() else { return ApiCredentials() }
+        switch stored {
+        case .apiKey(let key):
+            return ApiCredentials(apiKey: key)
+        case .oauth(let token):
+            return ApiCredentials(oauthToken: token)
+        }
     }
 }
 

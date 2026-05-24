@@ -53,7 +53,7 @@ let package = Package(
             dependencies: [.product(name: "Logging", package: "swift-log")],
             resources: [.copy("Resources")]
         ),
-        .target(name: "SwiftCodeAPI", dependencies: ["SwiftCodeCore", .product(name: "AsyncHTTPClient", package: "async-http-client")]),
+        .target(name: "SwiftCodeAPI", dependencies: ["SwiftCodeCore", "SwiftCodeNative", .product(name: "AsyncHTTPClient", package: "async-http-client"), .product(name: "Crypto", package: "swift-crypto")]),
         .target(name: "SwiftCodeAgent", dependencies: ["SwiftCodeCore", "SwiftCodeAPI", "SwiftCodeNative"]),
         .target(name: "SwiftCodeTerminalUI", dependencies: ["SwiftCodeCore", "SwiftCodeNative", .product(name: "NIOCore", package: "swift-nio")]),
         .target(name: "SwiftCodeTools", dependencies: ["SwiftCodeCore", "SwiftCodeAgent", "SwiftCodeTerminalUI", "SwiftCodeNative", "SwiftCodePermissions"]),

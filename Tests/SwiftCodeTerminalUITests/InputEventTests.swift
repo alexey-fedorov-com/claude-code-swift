@@ -52,10 +52,24 @@ final class InputEventTests: XCTestCase {
         XCTAssertEqual(event, .backspace, "DEL (0x7F) = backspace")
     }
 
-    func testParseEnter() {
-        // Ctrl+M = 0x0D = carriage return (often Enter key)
+    func testParseEnterCR() {
+        // In raw mode the Enter key sends CR (0x0D). The reader must surface
+        // it as `.enter`, not as Ctrl+M — otherwise the REPL can't submit.
         let event = reader.parse(bytes: [0x0D])
-        XCTAssertEqual(event, .controlChar("m"), "CR = controlChar m")
+        XCTAssertEqual(event, .enter, "CR (0x0D) must parse as .enter")
+    }
+
+    func testParseEnterLF() {
+        // LF (0x0A) also means Enter — e.g. when ICRNL translation is on.
+        let event = reader.parse(bytes: [0x0A])
+        XCTAssertEqual(event, .enter, "LF (0x0A) must parse as .enter")
+    }
+
+    func testParseTab() {
+        // Tab (0x09) must surface as `.tab`, not Ctrl+I. Suggestion overlay
+        // routes `.tab` to apply the selected suggestion.
+        let event = reader.parse(bytes: [0x09])
+        XCTAssertEqual(event, .tab, "Tab (0x09) must parse as .tab")
     }
 
     func testParseEscape() {

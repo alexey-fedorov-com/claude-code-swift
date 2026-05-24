@@ -7,6 +7,15 @@ public enum REPLReducer {
     /// (Enter on a non-empty cursor) that the caller should dispatch to the model.
     @discardableResult
     public static func apply(event: InputEvent, to state: inout ChatScreenState) -> Bool {
+        // Login flow takes over input entirely while active. The detailed
+        // outcome (menu choice, key submission, etc.) is exposed via
+        // `applyAndCollectLoginOutcome`; callers that just need state changes
+        // can keep using `apply`.
+        if state.loginFlow != nil {
+            _ = LoginReducer.reduce(event: event, to: &state)
+            return false
+        }
+
         // When suggestions are active, route navigation/confirm/dismiss keys first.
         if state.suggestionTrigger != nil {
             switch event {
@@ -69,6 +78,21 @@ public enum REPLReducer {
 
         recomputeSuggestions(state: &state)
         return false
+    }
+
+    /// Same as `apply` but also surfaces any login-flow outcome so the REPL
+    /// loop can kick off background work (validating an API key, starting
+    /// OAuth, etc.). Use this from REPLs that drive the login flow.
+    public static func applyAndCollectLoginOutcome(
+        event: InputEvent,
+        to state: inout ChatScreenState
+    ) -> (didSubmit: Bool, login: LoginReducer.Outcome?) {
+        if state.loginFlow != nil {
+            let outcome = LoginReducer.reduce(event: event, to: &state)
+            return (false, outcome)
+        }
+        let submitted = apply(event: event, to: &state)
+        return (submitted, nil)
     }
 
     // MARK: - Internal helpers (internal so tests can call them if needed)

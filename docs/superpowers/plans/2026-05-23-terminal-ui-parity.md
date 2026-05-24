@@ -2743,6 +2743,625 @@ git commit -m "docs(parity): TUI contract + final report update"
 
 ---
 
+## Task 12: Slash Command Autocomplete
+
+**Files:**
+- Create: `Sources/SwiftCodeTerminalUI/Components/PromptInput/SuggestionOverlay.swift`
+- Create: `Sources/SwiftCodeTerminalUI/Components/PromptInput/SlashCommandSuggestions.swift`
+- Modify: `Sources/SwiftCodeTerminalUI/ChatScreen.swift` (extend `ChatScreenState` + render overlay below PromptInput when suggestions visible)
+- Modify: `Sources/SwiftCodeTerminalUI/App/REPLReducer.swift` (Up/Down/Tab/Enter routing when suggestions visible; recompute on text change)
+- Modify: `Sources/SwiftCodeCLI/InteractiveREPL.swift` (pass `[CommandSuggestion]` list into reducer)
+- Test: `Tests/SwiftCodeTerminalUITests/SlashCommandSuggestionTests.swift`
+
+**Behavior to match (reference: `.reference/src/utils/suggestions/commandSuggestions.ts` + `PromptInput.tsx`):**
+
+- Trigger: cursor is inside a slash-command token. Token = `/` at start-of-line or after whitespace, followed by `[a-zA-Z][a-zA-Z0-9:\-_]*` (empty allowed right after `/`).
+- Suggestion list filtered by prefix (case-insensitive). Reference uses Fuse.js fuzzy; we ship simple prefix + substring scoring (fuzzy deferred; documented in `ui-contract.md`).
+- Max 6 visible suggestions; if more match, append `+N more` hint.
+- Row: `> /{name}` (selected, theme.claude) or `  /{name}` (unselected), then spacer, then dim description right-aligned.
+- Keyboard while visible: `Up`/`Down` move selection (clamp), `Tab`/`Enter` insert `/{name} `, `Esc` dismiss, anything else passes through.
+
+- [ ] **Step 1: Write failing tests**
+
+`Tests/SwiftCodeTerminalUITests/SlashCommandSuggestionTests.swift`:
+
+```swift
+import XCTest
+@testable import SwiftCodeTerminalUI
+
+final class SlashCommandSuggestionTests: XCTestCase {
+    private let registry: [CommandSuggestion] = [
+        CommandSuggestion(name: "help", description: "Show available commands"),
+        CommandSuggestion(name: "clear", description: "Clear conversation"),
+        CommandSuggestion(name: "exit", description: "Exit"),
+        CommandSuggestion(name: "config", description: "Configuration"),
+    ]
+
+    func testTriggerAtStartOfEmptyLine() {
+        let trigger = SlashCommandSuggestions.detectTrigger(text: "/", cursorOffset: 1)
+        XCTAssertNotNil(trigger)
+        XCTAssertEqual(trigger?.tokenStart, 0)
+        XCTAssertEqual(trigger?.prefix, "")
+    }
+
+    func testTriggerAfterWhitespace() {
+        let trigger = SlashCommandSuggestions.detectTrigger(text: "hello /he", cursorOffset: 9)
+        XCTAssertEqual(trigger?.tokenStart, 6)
+        XCTAssertEqual(trigger?.prefix, "he")
+    }
+
+    func testNoTriggerInsideWord() {
+        XCTAssertNil(SlashCommandSuggestions.detectTrigger(text: "foo/bar", cursorOffset: 7))
+    }
+
+    func testFilterReturnsMatchingByPrefix() {
+        let matches = SlashCommandSuggestions.filter(prefix: "c", commands: registry)
+        XCTAssertEqual(matches.map(\.name), ["clear", "config"])
+    }
+
+    func testApplyReplacesTokenWithSelectedCommand() {
+        let cursor = TextCursor(text: "hello /he", offset: 9)
+        let updated = SlashCommandSuggestions.apply(
+            cursor: cursor,
+            trigger: SlashTrigger(tokenStart: 6, prefix: "he"),
+            selection: CommandSuggestion(name: "help", description: "Show available commands")
+        )
+        XCTAssertEqual(updated.text, "hello /help ")
+        XCTAssertEqual(updated.offset, 12)
+    }
+
+    func testOverlayRendersSelectedRowHighlighted() {
+        let items = registry.prefix(3).map { SuggestionItem.command($0) }
+        let view = SuggestionOverlay(items: Array(items), selectedIndex: 1, width: 40)
+        let screen = renderViewToScreen(view, width: 40, height: 5)
+        // selected row is index 1 inside the rounded box (row 0 is border)
+        let row2 = (0..<40).map { String(screen.cell(at: $0, row: 2).character) }.joined()
+        XCTAssertTrue(row2.contains("> /clear"))
+    }
+}
+```
+
+- [ ] **Step 2: Run, verify fail**
+
+```bash
+swift test --filter SlashCommandSuggestionTests
+```
+
+- [ ] **Step 3: Implement SlashCommandSuggestions**
+
+`Sources/SwiftCodeTerminalUI/Components/PromptInput/SlashCommandSuggestions.swift`:
+
+```swift
+public struct CommandSuggestion: Sendable, Equatable {
+    public let name: String
+    public let description: String
+    public init(name: String, description: String) {
+        self.name = name; self.description = description
+    }
+}
+
+public struct SlashTrigger: Sendable, Equatable {
+    public let tokenStart: Int
+    public let prefix: String
+    public init(tokenStart: Int, prefix: String) {
+        self.tokenStart = tokenStart; self.prefix = prefix
+    }
+}
+
+public enum SlashCommandSuggestions {
+    public static func detectTrigger(text: String, cursorOffset: Int) -> SlashTrigger? {
+        let chars = Array(text)
+        guard cursorOffset >= 0 && cursorOffset <= chars.count else { return nil }
+        var i = cursorOffset - 1
+        while i >= 0 {
+            let ch = chars[i]
+            if ch == "/" {
+                let isStart = (i == 0) || chars[i - 1].isWhitespace
+                if !isStart { return nil }
+                let prefixChars = Array(chars[(i + 1)..<cursorOffset])
+                if prefixChars.contains(where: { !isCommandChar($0) }) { return nil }
+                return SlashTrigger(tokenStart: i, prefix: String(prefixChars))
+            }
+            if !isCommandChar(ch) { return nil }
+            i -= 1
+        }
+        return nil
+    }
+
+    public static func filter(prefix: String, commands: [CommandSuggestion]) -> [CommandSuggestion] {
+        guard !prefix.isEmpty else { return commands }
+        let lower = prefix.lowercased()
+        return commands.filter { $0.name.lowercased().hasPrefix(lower) }
+    }
+
+    public static func apply(cursor: TextCursor, trigger: SlashTrigger,
+                             selection: CommandSuggestion) -> TextCursor {
+        let chars = Array(cursor.text)
+        let before = String(chars[0..<trigger.tokenStart])
+        let after  = String(chars[cursor.offset..<chars.count])
+        let inserted = "/\(selection.name) "
+        let newText = before + inserted + after
+        let newOffset = (before + inserted).count
+        return TextCursor(text: newText, offset: newOffset)
+    }
+
+    private static func isCommandChar(_ ch: Character) -> Bool {
+        return ch.isLetter || ch.isNumber || ch == ":" || ch == "-" || ch == "_"
+    }
+}
+```
+
+- [ ] **Step 4: Implement SuggestionOverlay (shared with at-mention)**
+
+`Sources/SwiftCodeTerminalUI/Components/PromptInput/SuggestionOverlay.swift`:
+
+```swift
+public enum SuggestionItem: Sendable, Equatable {
+    case command(CommandSuggestion)
+    case path(PathSuggestion)
+}
+
+public struct PathSuggestion: Sendable, Equatable {
+    public let display: String
+    public let isDirectory: Bool
+    public init(display: String, isDirectory: Bool) {
+        self.display = display; self.isDirectory = isDirectory
+    }
+}
+
+public struct SuggestionOverlay: View {
+    public let items: [SuggestionItem]
+    public let selectedIndex: Int
+    public let width: Int
+    public let maxVisible: Int
+
+    public init(items: [SuggestionItem], selectedIndex: Int, width: Int, maxVisible: Int = 6) {
+        self.items = items; self.selectedIndex = selectedIndex
+        self.width = width; self.maxVisible = maxVisible
+    }
+
+    public func buildLayoutNode(theme: Theme, styles: CellStyleTable) -> LayoutNode {
+        guard !items.isEmpty else {
+            return BoxView(width: .fixed(width), height: .fixed(0))
+                .buildLayoutNode(theme: theme, styles: styles)
+        }
+        let visible = Array(items.prefix(maxVisible))
+        var rows: [any View] = visible.enumerated().map { idx, item in
+            row(item: item, selected: idx == selectedIndex, theme: theme)
+        }
+        if items.count > maxVisible {
+            rows.append(TextView("+\(items.count - maxVisible) more", dim: true))
+        }
+        return BoxView(width: .fixed(width),
+                       padding: EdgeInsets(horizontal: 1),
+                       border: .rounded, borderColor: .ansi256(240),
+                       flexDirection: .column, children: rows)
+            .buildLayoutNode(theme: theme, styles: styles)
+    }
+
+    private func row(item: SuggestionItem, selected: Bool, theme: Theme) -> any View {
+        let (lhs, rhs): (String, String)
+        switch item {
+        case .command(let c):
+            lhs = "/\(c.name)"; rhs = c.description
+        case .path(let p):
+            lhs = p.display; rhs = p.isDirectory ? "directory" : "file"
+        }
+        let marker = selected ? "> " : "  "
+        return BoxView(width: .auto, flexDirection: .row, children: [
+            TextView(marker, color: selected ? theme.claude : .default),
+            TextView(lhs, color: selected ? theme.claude : .default),
+            SpacerView(),
+            TextView(rhs, dim: true),
+        ])
+    }
+}
+```
+
+- [ ] **Step 5: Extend ChatScreenState + REPLReducer**
+
+In `Sources/SwiftCodeTerminalUI/ChatScreen.swift`, extend `ChatScreenState`:
+
+```swift
+public var suggestions: [SuggestionItem] = []
+public var suggestionSelectedIndex: Int = 0
+public var suggestionTrigger: SuggestionTriggerKind? = nil
+public var workingDirectory: String = FileManager.default.currentDirectoryPath
+public var availableCommands: [CommandSuggestion] = []
+
+public enum SuggestionTriggerKind: Sendable, Equatable {
+    case slash(SlashTrigger)
+    case atMention(AtMentionTrigger)  // wired in Task 13
+}
+```
+
+Render the overlay between PromptInput row and footer:
+
+```swift
+if !state.suggestions.isEmpty {
+    rows.append(SuggestionOverlay(items: state.suggestions,
+                                  selectedIndex: state.suggestionSelectedIndex,
+                                  width: max(20, /* width passed by parent */ 80)))
+}
+```
+
+Replace `REPLReducer.apply`:
+
+```swift
+public enum REPLReducer {
+    public static func apply(event: InputEvent, to state: inout ChatScreenState) {
+        // Suggestion-active routing first
+        if state.suggestionTrigger != nil {
+            switch event {
+            case .arrowUp:
+                state.suggestionSelectedIndex = max(0, state.suggestionSelectedIndex - 1)
+                return
+            case .arrowDown:
+                state.suggestionSelectedIndex = min(state.suggestions.count - 1,
+                                                    state.suggestionSelectedIndex + 1)
+                return
+            case .escape:
+                state.suggestions = []
+                state.suggestionTrigger = nil
+                state.suggestionSelectedIndex = 0
+                return
+            case .character(let c) where c == "\t" || c == "\n":
+                applySelectedSuggestion(state: &state)
+                return
+            default: break
+            }
+        }
+        // Normal input
+        switch event {
+        case .character(let c):
+            if c == "\n" { return }   // submit handled by caller
+            state.cursor.insert(String(c))
+        case .backspace: state.cursor.backspace()
+        case .delete:    state.cursor.delete()
+        case .arrowLeft: state.cursor.moveLeft()
+        case .arrowRight: state.cursor.moveRight()
+        case .paste(let s): state.cursor.insert(s)
+        default: break
+        }
+        recomputeSuggestions(state: &state)
+    }
+
+    static func recomputeSuggestions(state: inout ChatScreenState) {
+        if let slash = SlashCommandSuggestions.detectTrigger(
+            text: state.cursor.text, cursorOffset: state.cursor.offset) {
+            state.suggestionTrigger = .slash(slash)
+            state.suggestions = SlashCommandSuggestions
+                .filter(prefix: slash.prefix, commands: state.availableCommands)
+                .prefix(20).map { .command($0) }
+        } else {
+            // At-mention path wired in Task 13
+            state.suggestions = []
+            state.suggestionTrigger = nil
+        }
+        if state.suggestionSelectedIndex >= state.suggestions.count {
+            state.suggestionSelectedIndex = 0
+        }
+    }
+
+    static func applySelectedSuggestion(state: inout ChatScreenState) {
+        guard state.suggestionSelectedIndex < state.suggestions.count else { return }
+        let pick = state.suggestions[state.suggestionSelectedIndex]
+        switch (state.suggestionTrigger, pick) {
+        case (.slash(let trig)?, .command(let cmd)):
+            state.cursor = SlashCommandSuggestions.apply(cursor: state.cursor, trigger: trig, selection: cmd)
+        // .atMention case wired in Task 13
+        default: break
+        }
+        state.suggestions = []
+        state.suggestionTrigger = nil
+        state.suggestionSelectedIndex = 0
+    }
+}
+```
+
+- [ ] **Step 6: Wire availableCommands in InteractiveREPL**
+
+When constructing initial `ChatScreenState`, populate `availableCommands` from `await registry.listCommands()` (or equivalent — adapt to the actual `CommandRegistry` API). Each entry maps to `CommandSuggestion(name: ..., description: ...)`.
+
+- [ ] **Step 7: Run all suggestion tests**
+
+```bash
+swift test --filter SlashCommandSuggestionTests
+swift build
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/SwiftCodeTerminalUI/Components/PromptInput/SuggestionOverlay.swift \
+        Sources/SwiftCodeTerminalUI/Components/PromptInput/SlashCommandSuggestions.swift \
+        Sources/SwiftCodeTerminalUI/ChatScreen.swift \
+        Sources/SwiftCodeTerminalUI/App/REPLReducer.swift \
+        Sources/SwiftCodeCLI/InteractiveREPL.swift \
+        Tests/SwiftCodeTerminalUITests/SlashCommandSuggestionTests.swift
+git commit -m "feat(tui): slash command autocomplete in prompt input"
+```
+
+---
+
+## Task 13: File `@`-Mention Autocomplete
+
+**Files:**
+- Create: `Sources/SwiftCodeTerminalUI/Components/PromptInput/AtMentionSuggestions.swift`
+- Create: `Sources/SwiftCodeNative/PathCompletion.swift`
+- Modify: `Sources/SwiftCodeTerminalUI/App/REPLReducer.swift` (handle `@` trigger + route apply for `.atMention`)
+- Modify: `Sources/SwiftCodeCLI/InteractiveREPL.swift` (pass `workingDirectory` into state)
+- Test: `Tests/SwiftCodeTerminalUITests/AtMentionSuggestionTests.swift`
+- Test: `Tests/SwiftCodeNativeTests/PathCompletionTests.swift`
+
+**Behavior to match (reference: `.reference/src/utils/suggestions/directoryCompletion.ts` + `PromptInput.tsx:1283-1297`):**
+
+- Trigger: cursor inside `@`-token. Token = `@` at start-of-line or after whitespace, then path-like chars (letters, digits, `/`, `.`, `-`, `_`).
+- Suggestions are filesystem entries under `cwd + dir(partialPath)`, filtered by `basename(partialPath)` prefix.
+- Hidden entries (`.foo`) excluded unless prefix starts with `.`.
+- Directories shown with `directory` description, files with `file`. Result list sorted alphabetically (case-insensitive).
+- On Tab/Enter for a file: replace token with `@{relativePath} ` (trailing space). For a directory: replace with `@{path}/` (trailing slash, no space — user can keep typing children).
+
+- [ ] **Step 1: Write failing PathCompletion tests**
+
+`Tests/SwiftCodeNativeTests/PathCompletionTests.swift`:
+
+```swift
+import XCTest
+@testable import SwiftCodeNative
+
+final class PathCompletionTests: XCTestCase {
+    var tmp: URL!
+    override func setUp() {
+        tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        for name in ["alpha.txt", "beta.txt", "subdir", ".hidden"] {
+            let url = tmp.appendingPathComponent(name)
+            if name == "subdir" {
+                try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            } else {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+        }
+    }
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tmp)
+    }
+
+    func testTopLevelCompletionsExcludeHidden() throws {
+        let entries = try PathCompletion.complete(prefix: "", in: tmp.path)
+        let names = entries.map(\.name).sorted()
+        XCTAssertEqual(names, ["alpha.txt", "beta.txt", "subdir"])
+    }
+
+    func testHiddenIncludedWhenPrefixStartsWithDot() throws {
+        let entries = try PathCompletion.complete(prefix: ".", in: tmp.path)
+        XCTAssertTrue(entries.contains { $0.name == ".hidden" })
+    }
+
+    func testPrefixFilters() throws {
+        let entries = try PathCompletion.complete(prefix: "a", in: tmp.path)
+        XCTAssertEqual(entries.map(\.name), ["alpha.txt"])
+    }
+
+    func testDirectoryFlag() throws {
+        let entries = try PathCompletion.complete(prefix: "", in: tmp.path)
+        XCTAssertEqual(entries.first { $0.name == "subdir" }?.kind, .directory)
+    }
+}
+```
+
+- [ ] **Step 2: Implement PathCompletion**
+
+`Sources/SwiftCodeNative/PathCompletion.swift`:
+
+```swift
+import Foundation
+
+public enum PathCompletion {
+    public enum Kind: Sendable, Equatable { case file, directory }
+    public struct Entry: Sendable, Equatable {
+        public let name: String
+        public let kind: Kind
+        public init(name: String, kind: Kind) { self.name = name; self.kind = kind }
+    }
+
+    public static func complete(prefix: String, in directory: String) throws -> [Entry] {
+        let fm = FileManager.default
+        let url = URL(fileURLWithPath: directory)
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        let entries = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [])
+        let includeHidden = prefix.hasPrefix(".")
+        let mapped = entries.compactMap { (entry: URL) -> Entry? in
+            let name = entry.lastPathComponent
+            if !includeHidden && name.hasPrefix(".") { return nil }
+            if !prefix.isEmpty && !name.lowercased().hasPrefix(prefix.lowercased()) { return nil }
+            let isDir = (try? entry.resourceValues(forKeys: Set(keys)))?.isDirectory ?? false
+            return Entry(name: name, kind: isDir ? .directory : .file)
+        }
+        return mapped.sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+}
+```
+
+Run `swift test --filter PathCompletionTests` → PASS.
+
+- [ ] **Step 3: Write failing AtMentionSuggestionTests**
+
+`Tests/SwiftCodeTerminalUITests/AtMentionSuggestionTests.swift`:
+
+```swift
+import XCTest
+@testable import SwiftCodeTerminalUI
+
+final class AtMentionSuggestionTests: XCTestCase {
+    func testTriggerAtStart() {
+        let t = AtMentionSuggestions.detectTrigger(text: "@", cursorOffset: 1)
+        XCTAssertEqual(t?.tokenStart, 0)
+        XCTAssertEqual(t?.partialPath, "")
+    }
+
+    func testTriggerInsideToken() {
+        let t = AtMentionSuggestions.detectTrigger(text: "see @src/ma", cursorOffset: 11)
+        XCTAssertEqual(t?.tokenStart, 4)
+        XCTAssertEqual(t?.partialPath, "src/ma")
+    }
+
+    func testSplitDirectoryAndPrefix() {
+        let split = AtMentionSuggestions.splitDirectoryAndPrefix("src/ma")
+        XCTAssertEqual(split.directory, "src")
+        XCTAssertEqual(split.prefix, "ma")
+        XCTAssertEqual(AtMentionSuggestions.splitDirectoryAndPrefix("foo").directory, "")
+        XCTAssertEqual(AtMentionSuggestions.splitDirectoryAndPrefix("src/").prefix, "")
+    }
+
+    func testApplyForFileInsertsRelativePathWithTrailingSpace() {
+        let cursor = TextCursor(text: "see @src/ma", offset: 11)
+        let updated = AtMentionSuggestions.apply(
+            cursor: cursor,
+            trigger: AtMentionTrigger(tokenStart: 4, partialPath: "src/ma"),
+            selection: PathSuggestion(display: "src/main.swift", isDirectory: false)
+        )
+        XCTAssertEqual(updated.text, "see @src/main.swift ")
+        XCTAssertEqual(updated.offset, 20)
+    }
+
+    func testApplyForDirectoryInsertsTrailingSlashNoSpace() {
+        let cursor = TextCursor(text: "see @src", offset: 8)
+        let updated = AtMentionSuggestions.apply(
+            cursor: cursor,
+            trigger: AtMentionTrigger(tokenStart: 4, partialPath: "src"),
+            selection: PathSuggestion(display: "src", isDirectory: true)
+        )
+        XCTAssertEqual(updated.text, "see @src/")
+        XCTAssertEqual(updated.offset, 9)
+    }
+}
+```
+
+- [ ] **Step 4: Implement AtMentionSuggestions**
+
+`Sources/SwiftCodeTerminalUI/Components/PromptInput/AtMentionSuggestions.swift`:
+
+```swift
+public struct AtMentionTrigger: Sendable, Equatable {
+    public let tokenStart: Int
+    public let partialPath: String
+    public init(tokenStart: Int, partialPath: String) {
+        self.tokenStart = tokenStart; self.partialPath = partialPath
+    }
+}
+
+public enum AtMentionSuggestions {
+    public static func detectTrigger(text: String, cursorOffset: Int) -> AtMentionTrigger? {
+        let chars = Array(text)
+        guard cursorOffset >= 0 && cursorOffset <= chars.count else { return nil }
+        var i = cursorOffset - 1
+        while i >= 0 {
+            let ch = chars[i]
+            if ch == "@" {
+                let isStart = (i == 0) || chars[i - 1].isWhitespace
+                if !isStart { return nil }
+                let partial = String(chars[(i + 1)..<cursorOffset])
+                if partial.contains(where: { !isPathChar($0) }) { return nil }
+                return AtMentionTrigger(tokenStart: i, partialPath: partial)
+            }
+            if !isPathChar(ch) { return nil }
+            i -= 1
+        }
+        return nil
+    }
+
+    public static func splitDirectoryAndPrefix(_ partial: String) -> (directory: String, prefix: String) {
+        if let lastSlash = partial.lastIndex(of: "/") {
+            let dir = String(partial[partial.startIndex..<lastSlash])
+            let prefix = String(partial[partial.index(after: lastSlash)..<partial.endIndex])
+            return (dir, prefix)
+        }
+        return ("", partial)
+    }
+
+    public static func apply(cursor: TextCursor, trigger: AtMentionTrigger,
+                             selection: PathSuggestion) -> TextCursor {
+        let chars = Array(cursor.text)
+        let before = String(chars[0..<trigger.tokenStart])
+        let after  = String(chars[cursor.offset..<chars.count])
+        let display = selection.display.hasSuffix("/")
+            ? String(selection.display.dropLast())
+            : selection.display
+        let inserted = selection.isDirectory ? "@\(display)/" : "@\(display) "
+        let newText = before + inserted + after
+        let newOffset = (before + inserted).count
+        return TextCursor(text: newText, offset: newOffset)
+    }
+
+    private static func isPathChar(_ ch: Character) -> Bool {
+        return ch.isLetter || ch.isNumber || ch == "/" || ch == "." || ch == "-" || ch == "_"
+    }
+}
+```
+
+- [ ] **Step 5: Extend REPLReducer for @ trigger**
+
+In `REPLReducer.recomputeSuggestions`, after the slash branch's `if`:
+
+```swift
+else if let at = AtMentionSuggestions.detectTrigger(
+    text: state.cursor.text, cursorOffset: state.cursor.offset) {
+    let split = AtMentionSuggestions.splitDirectoryAndPrefix(at.partialPath)
+    let scanDir = split.directory.isEmpty
+        ? state.workingDirectory
+        : "\(state.workingDirectory)/\(split.directory)"
+    let entries = (try? PathCompletion.complete(prefix: split.prefix, in: scanDir)) ?? []
+    if !entries.isEmpty {
+        state.suggestionTrigger = .atMention(at)
+        state.suggestions = entries.prefix(20).map {
+            .path(PathSuggestion(
+                display: split.directory.isEmpty ? $0.name : "\(split.directory)/\($0.name)",
+                isDirectory: $0.kind == .directory
+            ))
+        }
+    } else {
+        state.suggestions = []; state.suggestionTrigger = nil
+    }
+}
+```
+
+In `applySelectedSuggestion`, add:
+
+```swift
+case (.atMention(let trig)?, .path(let p)):
+    state.cursor = AtMentionSuggestions.apply(cursor: state.cursor, trigger: trig, selection: p)
+```
+
+Add `import SwiftCodeNative` to the reducer file.
+
+- [ ] **Step 6: Wire workingDirectory**
+
+In `InteractiveREPL.run()`, when constructing `ChatScreenState`, set `workingDirectory = FileManager.default.currentDirectoryPath`.
+
+- [ ] **Step 7: Run all suggestion tests**
+
+```bash
+swift test --filter "AtMentionSuggestionTests|PathCompletionTests"
+swift build
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/SwiftCodeTerminalUI/Components/PromptInput/AtMentionSuggestions.swift \
+        Sources/SwiftCodeNative/PathCompletion.swift \
+        Sources/SwiftCodeTerminalUI/App/REPLReducer.swift \
+        Sources/SwiftCodeCLI/InteractiveREPL.swift \
+        Tests/SwiftCodeTerminalUITests/AtMentionSuggestionTests.swift \
+        Tests/SwiftCodeNativeTests/PathCompletionTests.swift
+git commit -m "feat(tui): file @-mention autocomplete in prompt input"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**

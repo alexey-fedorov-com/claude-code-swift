@@ -34,6 +34,9 @@ public struct ChatScreenState: Sendable, Equatable {
     public var availableCommands: [CommandSuggestion] = []
     public var workingDirectory: String = FileManager.default.currentDirectoryPath
 
+    /// When non-nil, the chat screen is replaced by the login flow.
+    public var loginFlow: LoginFlowState? = nil
+
     public init(version: String,
                 messages: [ChatMessage] = [],
                 cursor: TextCursor = TextCursor(),
@@ -67,8 +70,28 @@ public struct ChatScreen: View {
     public func buildLayoutNode(theme: Theme, styles: CellStyleTable) -> LayoutNode {
         var rows: [any View] = []
 
+        // Login flow takes over the screen entirely while active.
+        if let flow = state.loginFlow {
+            rows.append(SpacerView())
+            rows.append(LoginScreen(
+                flow: flow,
+                spinnerFrame: state.spinnerFrame,
+                width: state.width
+            ))
+            rows.append(SpacerView())
+            return BoxView(width: .auto, height: .auto,
+                           flexDirection: .column, children: rows)
+                .buildLayoutNode(theme: theme, styles: styles)
+        }
+
         if state.messages.isEmpty {
-            rows.append(WelcomeBanner(version: state.version))
+            rows.append(WelcomeCard(
+                version: state.version,
+                username: nil,
+                model: nil,
+                cwd: state.cwd,
+                width: state.width
+            ))
         } else {
             let msgs: [any View] = state.messages.map { msg in
                 switch msg {

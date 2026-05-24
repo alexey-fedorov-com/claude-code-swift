@@ -95,6 +95,7 @@ public actor InteractiveREPL {
         let modelCopy = model
         let systemPromptCopy = systemPrompt
         let clientCopy = client
+        let registryCopy = registry
 
         // Event loop: reads raw key events on a background thread
         let loop = EventLoop(onEvent: { event in
@@ -109,12 +110,14 @@ public actor InteractiveREPL {
                 final class SubmitResult: @unchecked Sendable {
                     var didSubmit = false
                     var submittedText = ""
+                    var loginOutcome: LoginReducer.Outcome?
                 }
                 let result = SubmitResult()
                 await app.withState { state in
-                    let submitted = REPLReducer.apply(event: event, to: &state)
-                    result.didSubmit = submitted
-                    if submitted {
+                    let r = REPLReducer.applyAndCollectLoginOutcome(event: event, to: &state)
+                    result.didSubmit = r.didSubmit
+                    result.loginOutcome = r.login
+                    if r.didSubmit {
                         result.submittedText = state.cursor.text
                         state.messages.append(.user(result.submittedText))
                         state.cursor = TextCursor()
@@ -122,12 +125,35 @@ public actor InteractiveREPL {
                     }
                 }
                 await app.renderFrameIfNeeded()
+
+                // Handle login flow side-effects before anything else.
+                if let outcome = result.loginOutcome {
+                    Task {
+                        await Self.handleLoginOutcome(
+                            outcome,
+                            app: app,
+                            continuation: continuation
+                        )
+                    }
+                    return
+                }
+
                 if result.didSubmit {
                     let submittedText = result.submittedText
-                    // Check for exit commands
-                    if submittedText == "/exit" || submittedText == "/quit" {
-                        continuation.yield(0)
-                        return
+                    // Slash command routing
+                    if submittedText.hasPrefix("/") {
+                        if let parsed = parseSlashCommand(submittedText) {
+                            Task { [continuation] in
+                                await Self.dispatchSlashCommand(
+                                    name: parsed.name,
+                                    args: parsed.args,
+                                    app: app,
+                                    registry: registryCopy,
+                                    continuation: continuation
+                                )
+                            }
+                            return
+                        }
                     }
                     // Dispatch to model in background
                     Task {
@@ -180,6 +206,197 @@ public actor InteractiveREPL {
                 state.isLoading = false
             }
         }
+        await app.renderFrameIfNeeded()
+    }
+
+    // MARK: - Slash Command Dispatch
+
+    private static func dispatchSlashCommand(
+        name: String,
+        args: String,
+        app: App<ChatScreenState>,
+        registry: CommandRegistry,
+        continuation: AsyncStream<Int32>.Continuation
+    ) async {
+        guard let command = await registry.lookup(name: name) else {
+            await app.withState { state in
+                state.messages.append(.system("Unknown command: /\(name) — try /help"))
+                state.isLoading = false
+            }
+            await app.renderFrameIfNeeded()
+            return
+        }
+
+        let context = SlashCommandContext(
+            workingDirectory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        )
+
+        let result: SlashCommandResult
+        do {
+            result = try await command.execute(input: args, context: context)
+        } catch {
+            await app.withState { state in
+                state.messages.append(.system("Command /\(name) failed: \(error)"))
+                state.isLoading = false
+            }
+            await app.renderFrameIfNeeded()
+            return
+        }
+
+        switch result {
+        case .message(let text):
+            await app.withState { state in
+                state.messages.append(.system(text))
+                state.isLoading = false
+            }
+        case .noop:
+            await app.withState { state in
+                state.isLoading = false
+            }
+        case .exit(let code):
+            continuation.yield(code)
+            return
+        case .clearContext:
+            await app.withState { state in
+                state.messages = []
+                state.isLoading = false
+            }
+        case .setModel(let m):
+            await app.withState { state in
+                state.messages.append(.system("Switched model → \(m)"))
+                state.isLoading = false
+            }
+        case .promptInjection(let text):
+            await app.withState { state in
+                state.cursor = TextCursor(text: text, offset: text.count)
+                state.isLoading = false
+            }
+        case .showLoginFlow:
+            await app.withState { state in
+                state.loginFlow = .menu
+                state.isLoading = false
+            }
+        case .logoutCompleted(let message):
+            await app.withState { state in
+                state.messages.append(.system(message))
+                state.isLoading = false
+            }
+        }
+        await app.renderFrameIfNeeded()
+    }
+
+    // MARK: - Login Flow Side Effects
+
+    private static func handleLoginOutcome(
+        _ outcome: LoginReducer.Outcome,
+        app: App<ChatScreenState>,
+        continuation: AsyncStream<Int32>.Continuation
+    ) async {
+        switch outcome {
+        case .chooseApiKey:
+            // Pure state transition; LoginReducer already set apiKeyEntry.
+            await app.renderFrameIfNeeded()
+
+        case .submitApiKey(let key):
+            await app.withState { state in
+                state.loginFlow = .validatingApiKey
+            }
+            await app.renderFrameIfNeeded()
+            await Self.runApiKeyValidation(key: key, app: app)
+
+        case .chooseOAuth:
+            await Self.runOAuthFlow(app: app)
+
+        case .cancel:
+            await app.withState { state in
+                state.messages.append(.system("Login cancelled."))
+            }
+            await app.renderFrameIfNeeded()
+
+        case .dismiss:
+            await app.renderFrameIfNeeded()
+        }
+    }
+
+    private static func runApiKeyValidation(
+        key: String,
+        app: App<ChatScreenState>
+    ) async {
+        let validator = ApiKeyValidator()
+        let result = await validator.validate(apiKey: key)
+        await validator.shutdown()
+
+        switch result {
+        case .valid:
+            do {
+                try CredentialStore().saveApiKey(key)
+                await app.withState { state in
+                    state.loginFlow = .success(message: "API key saved to Keychain. You're logged in.")
+                }
+            } catch {
+                await app.withState { state in
+                    state.loginFlow = .error(message: "Validated, but failed to save to Keychain: \(error)")
+                }
+            }
+        case .invalid(let reason):
+            await app.withState { state in
+                state.loginFlow = .error(message: reason)
+            }
+        case .transientError(let msg):
+            await app.withState { state in
+                state.loginFlow = .error(message: "Could not reach Anthropic: \(msg)")
+            }
+        }
+        await app.renderFrameIfNeeded()
+    }
+
+    private static func runOAuthFlow(app: App<ChatScreenState>) async {
+        let server = CallbackServer()
+        let port: Int
+        do {
+            port = try await server.start()
+        } catch {
+            await app.withState { state in
+                state.loginFlow = .error(message: "Could not start callback listener: \(error)")
+            }
+            await app.renderFrameIfNeeded()
+            return
+        }
+
+        let service = OAuthService()
+        let request = await service.prepareAuthorization(redirectPort: port)
+        let urlString = request.authorizeURL.absoluteString
+
+        await app.withState { state in
+            state.loginFlow = .oauthWaiting(authorizeURL: urlString)
+        }
+        await app.renderFrameIfNeeded()
+
+        _ = BrowserLauncher.open(request.authorizeURL)
+
+        do {
+            let captured = try await server.waitForCallback(timeoutSeconds: 300)
+            await server.stop()
+
+            let code = try await service.extractCode(from: captured, expectedState: request.state)
+
+            await app.withState { state in
+                state.loginFlow = .oauthExchanging
+            }
+            await app.renderFrameIfNeeded()
+
+            let token = try await service.exchange(code: code, request: request)
+            try CredentialStore().saveOAuthToken(token)
+            await app.withState { state in
+                state.loginFlow = .success(message: "Signed in with Claude. Token saved to Keychain.")
+            }
+        } catch {
+            await server.stop()
+            await app.withState { state in
+                state.loginFlow = .error(message: "OAuth failed: \(error)")
+            }
+        }
+        await service.shutdown()
         await app.renderFrameIfNeeded()
     }
 }

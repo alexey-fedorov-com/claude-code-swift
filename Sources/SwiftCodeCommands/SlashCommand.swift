@@ -62,6 +62,10 @@ public enum SlashCommandResult: Sendable {
     case clearContext
     /// Switch the active model to the given alias or ID.
     case setModel(String)
+    /// Open the interactive login flow (menu → API key or OAuth).
+    case showLoginFlow
+    /// Drop currently stored credentials and report status.
+    case logoutCompleted(message: String)
 }
 
 // MARK: - SlashCommand Protocol

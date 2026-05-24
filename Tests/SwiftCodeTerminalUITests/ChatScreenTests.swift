@@ -12,7 +12,10 @@ final class ChatScreenTests: XCTestCase {
         let view = ChatScreen(state: ChatScreenState(version: "2.1.88"))
         let screen = renderViewToScreen(view, width: 80, height: 30)
         let text = screenText(screen)
-        XCTAssertTrue(text.contains("Welcome to Swift Code"))
+        // Compact welcome card: product name + version on the top border.
+        XCTAssertTrue(text.contains("Swift Code"))
+        XCTAssertTrue(text.contains("v2.1.88"))
+        // Rounded border from both the welcome card and the prompt input.
         XCTAssertTrue(text.contains("╭"))
         XCTAssertTrue(text.contains("> "))
     }
