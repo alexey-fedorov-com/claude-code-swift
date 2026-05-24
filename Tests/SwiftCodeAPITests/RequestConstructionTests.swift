@@ -181,4 +181,58 @@ final class RequestConstructionTests: XCTestCase {
         let httpRequest = try client.buildHTTPRequest(request: request, streaming: false)
         XCTAssertNotNil(httpRequest.body)
     }
+
+    // MARK: - OAuth Header Construction
+
+    func testOAuthCredentialsSendBearerToken() throws {
+        let client = AnthropicClient(
+            credentials: ApiCredentials(oauthToken: OAuthToken(accessToken: "tok-abc-123"))
+        )
+        let request = MessagesRequest(model: "claude-sonnet-4-6", maxTokens: 1024, messages: [])
+        let httpRequest = try client.buildHTTPRequest(request: request, streaming: false)
+
+        XCTAssertEqual(httpRequest.headers["Authorization"].first, "Bearer tok-abc-123",
+                       "OAuth token must be sent as Authorization: Bearer ...")
+        XCTAssertTrue(httpRequest.headers["x-api-key"].isEmpty,
+                      "x-api-key must NOT be set when using OAuth (would conflict with Bearer auth)")
+    }
+
+    func testOAuthCredentialsAddOAuthBetaHeader() throws {
+        let client = AnthropicClient(
+            credentials: ApiCredentials(oauthToken: OAuthToken(accessToken: "tok-xyz"))
+        )
+        let request = MessagesRequest(model: "claude-sonnet-4-6", maxTokens: 1024, messages: [])
+        let httpRequest = try client.buildHTTPRequest(request: request, streaming: false)
+
+        let betaHeader = httpRequest.headers["anthropic-beta"].first ?? ""
+        XCTAssertTrue(betaHeader.contains("oauth-2025-04-20"),
+                      "anthropic-beta must include oauth-2025-04-20 when sending Bearer token (got: \(betaHeader))")
+    }
+
+    func testApiKeyCredentialsDoNotAddOAuthBetaHeader() throws {
+        let client = AnthropicClient(apiKey: "sk-test")
+        let request = MessagesRequest(model: "claude-sonnet-4-6", maxTokens: 1024, messages: [])
+        let httpRequest = try client.buildHTTPRequest(request: request, streaming: false)
+
+        let betaHeader = httpRequest.headers["anthropic-beta"].first ?? ""
+        XCTAssertFalse(betaHeader.contains("oauth-2025-04-20"),
+                       "OAuth beta header must NOT be present when using API key auth (got: \(betaHeader))")
+        XCTAssertTrue(httpRequest.headers["Authorization"].isEmpty,
+                      "Authorization header must NOT be set when using API key")
+    }
+
+    func testOAuthPreferredOverApiKeyWhenBothPresent() throws {
+        let client = AnthropicClient(
+            credentials: ApiCredentials(
+                apiKey: "sk-fallback",
+                oauthToken: OAuthToken(accessToken: "tok-preferred")
+            )
+        )
+        let request = MessagesRequest(model: "claude-sonnet-4-6", maxTokens: 1024, messages: [])
+        let httpRequest = try client.buildHTTPRequest(request: request, streaming: false)
+
+        XCTAssertEqual(httpRequest.headers["Authorization"].first, "Bearer tok-preferred")
+        XCTAssertTrue(httpRequest.headers["x-api-key"].isEmpty,
+                      "When both creds are present, OAuth wins and x-api-key must be omitted")
+    }
 }

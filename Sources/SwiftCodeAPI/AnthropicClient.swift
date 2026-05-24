@@ -264,7 +264,13 @@ public actor AnthropicClient {
 
     // MARK: Config
 
-    private let apiKey: String
+    /// Static fallback credentials used when no auth provider is supplied
+    /// (or when the provider returns nothing).
+    private let credentials: ApiCredentials
+    /// Optional dynamic credential source. When set, it is queried per request
+    /// so that credentials saved during the session (e.g. via /login) take
+    /// effect on the very next call without rebuilding the client.
+    private let authProvider: (any AuthProvider)?
     private let baseURL: URL
     private let httpClient: HTTPClient
     private let ownsHTTPClient: Bool
@@ -281,7 +287,43 @@ public actor AnthropicClient {
         retryPolicy: RetryPolicy = .default,
         provider: APIProvider = .anthropic
     ) {
-        self.apiKey = apiKey
+        self.init(
+            credentials: ApiCredentials(apiKey: apiKey),
+            authProvider: nil,
+            baseURL: baseURL,
+            httpClient: httpClient,
+            retryPolicy: retryPolicy,
+            provider: provider
+        )
+    }
+
+    public init(
+        authProvider: any AuthProvider,
+        baseURL: URL = URL(string: "https://api.anthropic.com")!,
+        httpClient: HTTPClient? = nil,
+        retryPolicy: RetryPolicy = .default,
+        provider: APIProvider = .anthropic
+    ) {
+        self.init(
+            credentials: ApiCredentials(),
+            authProvider: authProvider,
+            baseURL: baseURL,
+            httpClient: httpClient,
+            retryPolicy: retryPolicy,
+            provider: provider
+        )
+    }
+
+    public init(
+        credentials: ApiCredentials,
+        authProvider: (any AuthProvider)? = nil,
+        baseURL: URL = URL(string: "https://api.anthropic.com")!,
+        httpClient: HTTPClient? = nil,
+        retryPolicy: RetryPolicy = .default,
+        provider: APIProvider = .anthropic
+    ) {
+        self.credentials = credentials
+        self.authProvider = authProvider
         self.baseURL = baseURL
         self.retryPolicy = retryPolicy
         self.provider = provider
@@ -300,6 +342,21 @@ public actor AnthropicClient {
         }
     }
 
+    // MARK: - Credential Resolution
+
+    /// Resolve credentials for an outgoing request. Prefers the auth provider
+    /// (so freshly-saved credentials are picked up); falls back to the static
+    /// credentials passed at init time.
+    private func resolveCredentials() async -> ApiCredentials {
+        if let provider = authProvider {
+            if let resolved = try? await provider.credentials(),
+               resolved.apiKey != nil || resolved.oauthToken != nil {
+                return resolved
+            }
+        }
+        return credentials
+    }
+
     deinit {
         if ownsHTTPClient {
             // Best-effort shutdown. Full lifecycle should be managed by the caller.
@@ -314,7 +371,8 @@ public actor AnthropicClient {
         var req = request
         req.stream = false
 
-        let httpRequest = try buildHTTPRequest(request: req, streaming: false)
+        let creds = await resolveCredentials()
+        let httpRequest = try buildHTTPRequest(request: req, streaming: false, credentials: creds)
 
         return try await RetryExecutor.execute(policy: retryPolicy) {
             let response = try await self.httpClient.execute(httpRequest, timeout: .seconds(600))
@@ -331,7 +389,8 @@ public actor AnthropicClient {
                 do {
                     var req = request
                     req.stream = true
-                    let httpRequest = try self.buildHTTPRequest(request: req, streaming: true)
+                    let creds = await self.resolveCredentials()
+                    let httpRequest = try self.buildHTTPRequest(request: req, streaming: true, credentials: creds)
 
                     let response = try await self.httpClient.execute(httpRequest, timeout: .seconds(600))
 
@@ -377,19 +436,33 @@ public actor AnthropicClient {
 
     nonisolated func buildHTTPRequest(
         request: MessagesRequest,
-        streaming: Bool
+        streaming: Bool,
+        credentials: ApiCredentials? = nil
     ) throws -> HTTPClientRequest {
+        let creds = credentials ?? self.credentials
         let url = baseURL.appendingPathComponent("/v1/messages")
         var httpRequest = HTTPClientRequest(url: url.absoluteString)
         httpRequest.method = .POST
 
         // Headers
         httpRequest.headers.add(name: "Content-Type", value: "application/json")
-        httpRequest.headers.add(name: "x-api-key", value: apiKey)
         httpRequest.headers.add(name: "anthropic-version", value: anthropicVersion)
 
+        // Auth: OAuth bearer is preferred; otherwise fall back to API key.
+        // Anthropic expects exactly one of `Authorization: Bearer ...` or `x-api-key`.
+        let usingOAuth: Bool
+        if let token = creds.oauthToken?.accessToken, !token.isEmpty {
+            httpRequest.headers.add(name: "Authorization", value: "Bearer \(token)")
+            usingOAuth = true
+        } else {
+            // Always set x-api-key on the non-OAuth path so tests + non-auth flows
+            // observe a stable header (even when empty).
+            httpRequest.headers.add(name: "x-api-key", value: creds.apiKey ?? "")
+            usingOAuth = false
+        }
+
         // Compose beta headers
-        let betas = composeBetaHeaders(request: request)
+        let betas = composeBetaHeaders(request: request, usingOAuth: usingOAuth)
         if !betas.isEmpty {
             httpRequest.headers.add(name: "anthropic-beta", value: betas.joined(separator: ","))
         }
@@ -403,12 +476,20 @@ public actor AnthropicClient {
         return httpRequest
     }
 
-    nonisolated func composeBetaHeaders(request: MessagesRequest) -> [String] {
+    nonisolated func composeBetaHeaders(
+        request: MessagesRequest,
+        usingOAuth: Bool = false
+    ) -> [String] {
         var betas: [String] = [BetaHeaders.claudeCode]
 
         // Prompt caching — always enabled for first-party
         if provider == .anthropic {
             betas.append(BetaHeaders.promptCachingScope)
+        }
+
+        // OAuth bearer-token mode requires the matching beta gate.
+        if usingOAuth {
+            betas.append(BetaHeaders.oauth)
         }
 
         // Thinking / extended thinking
@@ -468,6 +549,8 @@ public actor AnthropicClient {
 extension AnthropicClient {
 
     /// Convenience factory that reads credentials from the environment.
+    /// The client holds onto the auth provider so credentials are re-resolved
+    /// for every outgoing request (which lets `/login` take effect mid-session).
     public static func fromEnvironment(
         env: [String: String] = ProcessInfo.processInfo.environment,
         retryPolicy: RetryPolicy = .default
@@ -477,19 +560,12 @@ extension AnthropicClient {
 
         let authProvider = CompositeAuthProvider.makeDefault(env: env)
         let creds = try await authProvider.credentials()
-
-        // Prefer OAuth bearer over raw API key
-        let apiKey: String
-        if let token = creds.oauthToken?.accessToken {
-            apiKey = token
-        } else if let key = creds.apiKey {
-            apiKey = key
-        } else {
+        guard creds.apiKey != nil || creds.oauthToken != nil else {
             throw AuthError.noCredentials
         }
 
         return AnthropicClient(
-            apiKey: apiKey,
+            authProvider: authProvider,
             baseURL: baseURL,
             retryPolicy: retryPolicy,
             provider: provider

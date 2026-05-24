@@ -518,11 +518,10 @@ public struct SwiftCodeCommand: AsyncParsableCommand {
             throw ExitCode(exitCode)
 
         } else {
-            // Interactive REPL mode — resolve credentials from env or Keychain.
-            // An empty key is OK: the user can run /login to set one up.
-            let apiKey = await Self.resolveApiKey()
+            // Interactive REPL mode — resolve credentials from env or Keychain
+            // on every request so /login takes effect immediately.
             let resolvedModel = model ?? "claude-opus-4-6"
-            let client = AnthropicClient(apiKey: apiKey)
+            let client = AnthropicClient(authProvider: CompositeAuthProvider.makeDefault())
             let registry = CommandRegistry.defaultRegistry()
 
             let repl = InteractiveREPL(
@@ -544,23 +543,4 @@ public struct SwiftCodeCommand: AsyncParsableCommand {
         await Self.main()
     }
 
-    /// Best-effort API key resolution: env var first, then Keychain.
-    /// Returns an empty string if nothing is stored — the user can run /login.
-    static func resolveApiKey() async -> String {
-        if let envKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"],
-           !envKey.isEmpty {
-            return envKey
-        }
-        do {
-            if let stored = try CredentialStore().load() {
-                switch stored {
-                case .apiKey(let key): return key
-                case .oauth(let token): return token.accessToken
-                }
-            }
-        } catch {
-            // Fall through; an empty key just means unauthenticated.
-        }
-        return ""
-    }
 }

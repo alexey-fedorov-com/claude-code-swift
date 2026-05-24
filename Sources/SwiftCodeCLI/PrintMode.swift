@@ -48,13 +48,16 @@ public struct PrintMode: Sendable {
             return 1
         }
 
-        // Resolve API key
-        let key = apiKey
-            ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
-            ?? ""
-
         do {
-            let client = AnthropicClient(apiKey: key)
+            // Explicit --api-key wins; otherwise fall through env → keychain via
+            // the composite provider so users who logged in interactively can
+            // use -p mode without re-exporting their key.
+            let client: AnthropicClient
+            if let key = apiKey, !key.isEmpty {
+                client = AnthropicClient(apiKey: key)
+            } else {
+                client = AnthropicClient(authProvider: CompositeAuthProvider.makeDefault())
+            }
             let engine = QueryEngine(client: client, model: model)
 
             if outputFormat == .streamJSON {
